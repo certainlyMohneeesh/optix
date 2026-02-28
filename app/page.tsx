@@ -1,65 +1,185 @@
-import Image from "next/image";
+"use client";
+// ─────────────────────────────────────────────────────────────────────────────
+//  OPTIX — Option Chain Dashboard
+//  Main page — wires all components together
+// ─────────────────────────────────────────────────────────────────────────────
+import { useCallback } from "react";
+import { Header }           from "@/components/layout/Header";
+import { StatStrip }        from "@/components/option-chain/StatStrip";
+import { OptionChainTable } from "@/components/option-chain/OptionChainTable";
+import { OIBarChart }       from "@/components/option-chain/OIBarChart";
+import { AnalyticsPanel }   from "@/components/option-chain/AnalyticsPanel";
+import { GreeksTable }      from "@/components/option-chain/GreeksTable";
+import { SetupPanel }       from "@/components/option-chain/SetupPanel";
+import { Skeleton }         from "@/components/ui/skeleton";
+import { useOptionChain }   from "@/hooks/useOptionChain";
+import { useWebSocket }     from "@/hooks/useWebSocket";
+import { UPSTOX_INSTRUMENTS } from "@/lib/mock-data";
+import type { Broker, Symbol } from "@/lib/types";
 
 export default function Home() {
+  const oc = useOptionChain();
+
+  // ── Collect all instrument keys for WS subscription ─────────────────────
+  const instruments = oc.chain.flatMap((row) => [
+    row.call.instrument_key,
+    row.put.instrument_key,
+  ]);
+  const indexKey = UPSTOX_INSTRUMENTS[oc.symbol];
+  const allInstruments = [indexKey, ...instruments];
+
+  // ── WebSocket ticks → chain updates ─────────────────────────────────────
+  const onTicks = useCallback(
+    (ticks: Array<{ instrument_key: string; ltp: number; oi: number; volume: number }>) => {
+      oc.applyTicks(ticks);
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [oc.applyTicks]
+  );
+
+  useWebSocket({
+    enabled: oc.liveMode,
+    instruments: allInstruments,
+    onTicks,
+    onStatusChange: () => {},
+  });
+
+  const isLoading = oc.chain.length === 0;
+
   return (
-    <div className="flex min-h-screen items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex min-h-screen w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
-        </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
+    <div className="min-h-screen bg-zinc-50 flex flex-col">
+      {/* ── Header ── */}
+      <Header
+        broker={oc.broker}
+        symbol={oc.symbol}
+        expiry={oc.expiry}
+        tab={oc.tab}
+        liveMode={oc.liveMode}
+        connStatus={oc.connStatus}
+        lastTs={oc.lastTs}
+        tickAnim={oc.tickAnim}
+        onBroker={(b: Broker) => oc.setBroker(b)}
+        onSymbol={(s: Symbol) => oc.setSymbol(s)}
+        onExpiry={oc.setExpiry}
+        onTab={oc.setTab}
+        onLive={oc.setLiveMode}
+        onRefresh={oc.refresh}
+      />
+
+      {/* ── Body ── */}
+      <main className="flex-1 p-4 space-y-4 max-w-[1800px] mx-auto w-full">
+
+        {/* Demo banner */}
+        {oc.connStatus === "demo" && oc.tab !== "setup" && (
+          <div className="flex items-center justify-between bg-yellow-500/10 border border-yellow-500/20 rounded-lg px-4 py-2">
+            <p className="text-xs text-yellow-600">
+              <strong>Demo Mode</strong> — Showing simulated data. Go to{" "}
+              <button
+                className="underline hover:text-yellow-300 font-semibold"
+                onClick={() => oc.setTab("setup")}
+              >
+                SETUP
+              </button>{" "}
+              to connect real API.
+            </p>
+            <span className="text-[9px] text-yellow-600 font-mono">
+              {oc.broker.toUpperCase()} · {oc.symbol} · {oc.expiry}
+            </span>
+          </div>
+        )}
+
+        {/* ── Stat Strip ── */}
+        {isLoading ? (
+          <div className="grid gap-2" style={{ gridTemplateColumns: "auto repeat(6,1fr)" }}>
+            {Array.from({ length: 7 }).map((_, i) => (
+              <Skeleton key={i} className="h-16 bg-zinc-200" />
+            ))}
+          </div>
+        ) : (
+          <StatStrip
+            symbol={oc.symbol}
+            expiry={oc.expiry}
+            spot={oc.spot}
+            analytics={oc.analytics}
+          />
+        )}
+
+        {/* ── Chain tab ── */}
+        {oc.tab === "chain" && (
+          <>
+            {isLoading ? (
+              <Skeleton className="h-[500px] bg-zinc-200 rounded-lg" />
+            ) : (
+              <div className="bg-zinc-50/80 border border-zinc-200 rounded-lg p-4">
+                <OptionChainTable
+                  chain={oc.chain}
+                  analytics={oc.analytics}
+                  symbol={oc.symbol}
+                  spot={oc.spot}
+                  metric={oc.metric}
+                  filter={oc.filter}
+                  onMetric={oc.setMetric}
+                  onFilter={oc.setFilter}
+                />
+              </div>
+            )}
+            {!isLoading && (
+              <OIBarChart
+                chain={oc.chain}
+                symbol={oc.symbol}
+                expiry={oc.expiry}
+                spot={oc.spot}
+                maxPain={oc.analytics.maxPain}
+              />
+            )}
+          </>
+        )}
+
+        {/* ── Analytics tab ── */}
+        {oc.tab === "analytics" && (
+          isLoading ? (
+            <div className="grid grid-cols-2 gap-4">
+              {Array.from({ length: 4 }).map((_, i) => (
+                <Skeleton key={i} className="h-64 bg-zinc-200 rounded-lg" />
+              ))}
+            </div>
+          ) : (
+            <AnalyticsPanel
+              chain={oc.chain}
+              analytics={oc.analytics}
+              symbol={oc.symbol}
+              spot={oc.spot}
             />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
-        </div>
+          )
+        )}
+
+        {/* ── Greeks tab ── */}
+        {oc.tab === "greeks" && (
+          isLoading ? (
+            <Skeleton className="h-[600px] bg-zinc-200 rounded-lg" />
+          ) : (
+            <GreeksTable
+              chain={oc.chain}
+              symbol={oc.symbol}
+              spot={oc.spot}
+            />
+          )
+        )}
+
+        {/* ── Setup tab ── */}
+        {oc.tab === "setup" && <SetupPanel />}
+
       </main>
+
+      {/* ── Footer ── */}
+      <footer className="border-t border-zinc-200 px-4 py-2 flex justify-between text-[9px] font-mono text-zinc-400">
+        <span>
+          OPTIX · {oc.broker.toUpperCase()} · {oc.chain.length} strikes · {oc.symbol} {oc.expiry}
+        </span>
+        <span className={oc.connStatus === "connected" ? "text-green-700" : "text-yellow-700"}>
+          ⬤ {oc.connStatus === "demo" ? "SIMULATED DATA" : oc.connStatus.toUpperCase()}
+        </span>
+      </footer>
     </div>
   );
 }

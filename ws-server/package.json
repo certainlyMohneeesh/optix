@@ -1,0 +1,16 @@
+{
+  "name": "opchain-ws-server",
+  "version": "1.0.0",
+  "description": "OPTIX WebSocket proxy — bridges Upstox/Zerodha WS feeds to the frontend",
+  "type": "module",
+  "scripts": {
+    "dev": "bun run --watch index.ts",
+    "start": "bun run index.ts"
+  },
+  "dependencies": {
+    "ws": "^8.19.0"
+  },
+  "devDependencies": {
+    "@types/ws": "^8.18.1"
+  }
+}
