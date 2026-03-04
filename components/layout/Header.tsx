@@ -1,4 +1,5 @@
 "use client";
+import { useState, useEffect } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -59,6 +60,12 @@ export function Header({
   const expiryList = expiries.length ? expiries : (EXPIRIES[symbol] ?? []);
   const status = getStatus(connStatus);
 
+  const [now, setNow] = useState<Date>(() => new Date());
+  useEffect(() => {
+    const id = setInterval(() => setNow(new Date()), 1000);
+    return () => clearInterval(id);
+  }, []);
+
   return (
     <header className="sticky top-0 z-50 border-b border-zinc-200 bg-white/95 backdrop-blur">
       {/* ── Row 1: Logo + right controls ─────────────────────────────────── */}
@@ -74,12 +81,11 @@ export function Header({
         {/* Right side */}
         <div className="ml-auto flex items-center gap-1.5 sm:gap-2.5">
           <span
-            suppressHydrationWarning
             className={`hidden sm:block text-xs font-mono transition-colors duration-300 ${
               tickAnim ? "text-cyan-700" : "text-zinc-500"
             }`}
           >
-            {fTime(lastTs)}
+            {fTime(now)}
           </span>
 
           {/* Live toggle */}
