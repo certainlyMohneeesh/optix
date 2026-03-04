@@ -109,21 +109,25 @@ export function OptionChainTable({
 
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const atmRowRef          = useRef<HTMLTableRowElement>(null);
+  const hasCentered        = useRef(false);
 
-  // On every data refresh: horizontally center the strike column so both
-  // calls (left) and puts (right) are reachable by swiping.
+  // Only on the very first data load: horizontally center the strike column.
   useEffect(() => {
     const el = scrollContainerRef.current;
-    if (!el) return;
+    if (!el || hasCentered.current) return;
     // Scroll to horizontal center (where the STRIKE column sits)
     requestAnimationFrame(() => {
       el.scrollLeft = (el.scrollWidth - el.clientWidth) / 2;
     });
   }, [filtered]);
 
-  // Scroll ATM row into vertical view
+  // Only on the very first data load: scroll ATM row into vertical view.
   useEffect(() => {
-    atmRowRef.current?.scrollIntoView({ block: "center", behavior: "smooth" });
+    if (hasCentered.current) return;
+    const row = atmRowRef.current;
+    if (!row) return;
+    row.scrollIntoView({ block: "center", behavior: "smooth" });
+    hasCentered.current = true;
   }, [filtered]);
 
   return (
