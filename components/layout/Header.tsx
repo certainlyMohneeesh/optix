@@ -15,8 +15,8 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { Separator } from "@/components/ui/separator";
-import { Activity, RefreshCw, Settings, Zap, BarChart2, LogIn } from "lucide-react";
+
+import { Activity, RefreshCw, Zap, BarChart2, LogIn } from "lucide-react";
 import { SYMBOLS, EXPIRIES } from "@/lib/mock-data";
 import { fTime } from "@/lib/formatters";
 import type { Broker, Symbol, ViewTab, ConnectionStatus } from "@/lib/types";
@@ -61,94 +61,21 @@ export function Header({
 
   return (
     <header className="sticky top-0 z-50 border-b border-zinc-200 bg-white/95 backdrop-blur">
-      <div className="flex h-12 items-center gap-3 px-4 flex-wrap">
+      {/* ── Row 1: Logo + right controls ─────────────────────────────────── */}
+      <div className="flex h-11 items-center gap-2 px-3 sm:px-4 border-b border-zinc-100">
         {/* Logo */}
-        <div className="flex items-center gap-2 mr-2">
-          <BarChart2 className="h-5 w-5 text-violet-600" />
-          <span className="font-bold text-base tracking-tight bg-gradient-to-r from-violet-400 to-cyan-400 bg-clip-text text-transparent font-mono">
+        <div className="flex items-center gap-1.5 shrink-0">
+          <BarChart2 className="h-4 w-4 text-violet-600" />
+          <span className="font-bold text-sm tracking-tight bg-gradient-to-r from-violet-400 to-cyan-400 bg-clip-text text-transparent font-mono">
             OPTIX
           </span>
         </div>
 
-        <Separator orientation="vertical" className="h-6 bg-zinc-200" />
-
-        {/* Broker Toggle */}
-        <div className="flex gap-1">
-          {(["upstox", "zerodha"] as Broker[]).map((b) => (
-            <Button
-              key={b}
-              size="sm"
-              variant={broker === b ? "secondary" : "ghost"}
-              className={`h-7 text-xs font-bold px-3 ${
-                broker === b
-                  ? b === "upstox"
-                    ? "bg-cyan-500/20 text-cyan-700 border border-cyan-500/30 hover:bg-cyan-500/30"
-                    : "bg-orange-500/20 text-orange-600 border border-orange-500/30 hover:bg-orange-500/30"
-                  : "text-zinc-500 hover:text-zinc-500"
-              }`}
-              onClick={() => onBroker(b)}
-            >
-              {b === "upstox" ? "▲ UPSTOX" : "⬡ ZERODHA"}
-            </Button>
-          ))}
-        </div>
-
-        <Separator orientation="vertical" className="h-6 bg-zinc-200" />
-
-        {/* Symbol Select */}
-        <Select value={symbol} onValueChange={(v) => onSymbol(v as Symbol)}>
-          <SelectTrigger className="h-7 w-36 text-xs bg-zinc-100 border-zinc-300 font-mono">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent className="bg-zinc-100 border-zinc-300">
-            {SYMBOLS.map((s) => (
-              <SelectItem key={s} value={s} className="text-xs font-mono">
-                {s}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-
-        {/* Expiry Select */}
-        <Select value={expiry} onValueChange={onExpiry}>
-          <SelectTrigger className="h-7 w-36 text-xs bg-zinc-100 border-zinc-300 font-mono">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent className="bg-zinc-100 border-zinc-300">
-            {expiryList.map((e) => (
-              <SelectItem key={e} value={e} className="text-xs font-mono">
-                {e}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-
-        <Separator orientation="vertical" className="h-6 bg-zinc-200" />
-
-        {/* Tabs */}
-        <nav className="flex gap-1">
-          {(["chain", "analytics", "greeks", "setup"] as ViewTab[]).map((t) => (
-            <Button
-              key={t}
-              size="sm"
-              variant="ghost"
-              className={`h-7 px-3 text-xs font-bold uppercase tracking-wide ${
-                tab === t
-                  ? "bg-violet-500/20 text-violet-600 border border-violet-500/30"
-                  : "text-zinc-500 hover:text-zinc-500"
-              }`}
-              onClick={() => onTab(t)}
-            >
-              {t}
-            </Button>
-          ))}
-        </nav>
-
         {/* Right side */}
-        <div className="ml-auto flex items-center gap-3">
+        <div className="ml-auto flex items-center gap-1.5 sm:gap-2.5">
           <span
             suppressHydrationWarning
-            className={`text-xs font-mono transition-colors duration-300 ${
+            className={`hidden sm:block text-xs font-mono transition-colors duration-300 ${
               tickAnim ? "text-cyan-700" : "text-zinc-500"
             }`}
           >
@@ -158,7 +85,7 @@ export function Header({
           {/* Live toggle */}
           <Tooltip>
             <TooltipTrigger asChild>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-1.5">
                 <Switch
                   id="live-switch"
                   checked={liveMode}
@@ -167,23 +94,19 @@ export function Header({
                 />
                 <Label
                   htmlFor="live-switch"
-                  className={`text-xs font-bold cursor-pointer ${
+                  className={`hidden sm:flex text-xs font-bold cursor-pointer items-center gap-1 ${
                     liveMode ? "text-green-700" : "text-zinc-500"
                   }`}
                 >
                   {liveMode ? (
-                    <span className="flex items-center gap-1">
-                      <Activity className="h-3 w-3 animate-pulse" /> LIVE
-                    </span>
+                    <><Activity className="h-3 w-3 animate-pulse" /> LIVE</>
                   ) : (
                     "PAUSED"
                   )}
                 </Label>
               </div>
             </TooltipTrigger>
-            <TooltipContent side="bottom">
-              Toggle live data polling (every 5s)
-            </TooltipContent>
+            <TooltipContent side="bottom">Toggle live data polling</TooltipContent>
           </Tooltip>
 
           <Button
@@ -197,26 +120,96 @@ export function Header({
 
           <Badge
             variant="outline"
-            className={`text-xs font-bold px-2 py-0.5 ${status.class}`}
+            className={`text-[10px] font-bold px-1.5 py-0.5 ${status.class}`}
           >
-            {connStatus === "connected" && (
-              <Zap className="h-2.5 w-2.5 mr-1 inline" />
-            )}
+            {connStatus === "connected" && <Zap className="h-2.5 w-2.5 mr-0.5 inline" />}
             {status.label}
           </Badge>
 
-          {/* Login button — shown when not authenticated (demo or expired token) */}
           {(connStatus === "auth_required" || connStatus === "demo") && (
             <a href={`/api/auth/${broker}/login`}>
               <Button
                 size="sm"
-                className="h-7 px-3 text-xs font-bold bg-orange-500 hover:bg-orange-600 text-white gap-1"
+                className="h-7 px-2 sm:px-3 text-xs font-bold bg-orange-500 hover:bg-orange-600 text-white gap-1"
               >
                 <LogIn className="h-3 w-3" />
-                Login
+                <span className="hidden sm:inline">Login</span>
               </Button>
             </a>
           )}
+        </div>
+      </div>
+
+      {/* ── Row 2: Controls — horizontally scrollable on mobile ────────────── */}
+      <div className="overflow-x-auto scrollbar-none">
+        <div className="flex items-center gap-1.5 px-3 sm:px-4 h-9 min-w-max">
+          {/* Broker Toggle */}
+          <div className="flex gap-1 shrink-0">
+            {(["upstox", "zerodha"] as Broker[]).map((b) => (
+              <Button
+                key={b}
+                size="sm"
+                variant={broker === b ? "secondary" : "ghost"}
+                className={`h-6 text-[10px] font-bold px-2 ${
+                  broker === b
+                    ? b === "upstox"
+                      ? "bg-cyan-500/20 text-cyan-700 border border-cyan-500/30 hover:bg-cyan-500/30"
+                      : "bg-orange-500/20 text-orange-600 border border-orange-500/30 hover:bg-orange-500/30"
+                    : "text-zinc-500 hover:text-zinc-500"
+                }`}
+                onClick={() => onBroker(b)}
+              >
+                {b === "upstox" ? "▲ UPSTOX" : "⬡ ZERODHA"}
+              </Button>
+            ))}
+          </div>
+
+          <div className="w-px h-4 bg-zinc-200 shrink-0" />
+
+          {/* Symbol Select */}
+          <Select value={symbol} onValueChange={(v) => onSymbol(v as Symbol)}>
+            <SelectTrigger className="h-6 w-28 text-[10px] bg-zinc-100 border-zinc-300 font-mono shrink-0">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent className="bg-zinc-100 border-zinc-300">
+              {SYMBOLS.map((s) => (
+                <SelectItem key={s} value={s} className="text-xs font-mono">{s}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+
+          {/* Expiry Select */}
+          <Select value={expiry} onValueChange={onExpiry}>
+            <SelectTrigger className="h-6 w-28 text-[10px] bg-zinc-100 border-zinc-300 font-mono shrink-0">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent className="bg-zinc-100 border-zinc-300">
+              {expiryList.map((e) => (
+                <SelectItem key={e} value={e} className="text-xs font-mono">{e}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+
+          <div className="w-px h-4 bg-zinc-200 shrink-0" />
+
+          {/* Tabs */}
+          <nav className="flex gap-0.5 shrink-0">
+            {(["chain", "analytics", "greeks", "setup"] as ViewTab[]).map((t) => (
+              <Button
+                key={t}
+                size="sm"
+                variant="ghost"
+                className={`h-6 px-2 text-[10px] font-bold uppercase tracking-wide ${
+                  tab === t
+                    ? "bg-violet-500/20 text-violet-600 border border-violet-500/30"
+                    : "text-zinc-500 hover:text-zinc-500"
+                }`}
+                onClick={() => onTab(t)}
+              >
+                {t}
+              </Button>
+            ))}
+          </nav>
         </div>
       </div>
     </header>

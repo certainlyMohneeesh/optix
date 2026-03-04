@@ -71,11 +71,11 @@ export default function Home() {
       />
 
       {/* ── Body ── */}
-      <main className="flex-1 p-4 space-y-4 max-w-[1800px] mx-auto w-full">
+      <main className="flex-1 px-3 py-3 sm:p-4 space-y-3 sm:space-y-4 max-w-[1800px] mx-auto w-full">
 
         {/* Demo banner */}
         {oc.connStatus === "demo" && oc.tab !== "setup" && (
-          <div className="flex items-center justify-between bg-yellow-500/10 border border-yellow-500/20 rounded-lg px-4 py-2">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1 bg-yellow-500/10 border border-yellow-500/20 rounded-lg px-3 py-2">
             <p className="text-xs text-yellow-600">
               <strong>Demo Mode</strong> — Showing simulated data. Go to{" "}
               <button
@@ -94,9 +94,9 @@ export default function Home() {
 
         {/* ── Stat Strip ── */}
         {isLoading ? (
-          <div className="grid gap-2" style={{ gridTemplateColumns: "auto repeat(6,1fr)" }}>
+          <div className="grid gap-2 grid-cols-2 sm:grid-cols-3 lg:grid-cols-7">
             {Array.from({ length: 7 }).map((_, i) => (
-              <Skeleton key={i} className="h-16 bg-zinc-200" />
+              <Skeleton key={i} className={`h-16 bg-zinc-200 ${i === 0 ? "col-span-2 sm:col-span-3 lg:col-span-1" : ""}`} />
             ))}
           </div>
         ) : (
@@ -114,7 +114,7 @@ export default function Home() {
             {isLoading ? (
               <Skeleton className="h-[500px] bg-zinc-200 rounded-lg" />
             ) : (
-              <div className="bg-zinc-50/80 border border-zinc-200 rounded-lg p-4">
+              <div className="bg-zinc-50/80 border border-zinc-200 rounded-lg p-2 sm:p-4">
                 <OptionChainTable
                   chain={oc.chain}
                   analytics={oc.analytics}

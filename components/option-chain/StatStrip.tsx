@@ -47,9 +47,9 @@ export function StatStrip({ symbol, expiry, spot, analytics }: StatStripProps) {
   const ivSkewColor = ivSkew > 1.5 ? "#f87171" : ivSkew < -1.5 ? "#34d399" : "#fbbf24";
 
   return (
-    <div className="grid gap-2" style={{ gridTemplateColumns: "auto repeat(6, 1fr)" }}>
-      {/* Spot price — larger */}
-      <Card className="bg-white border-zinc-200 p-3 border-l-2 border-l-violet-500">
+    <div className="grid gap-2 grid-cols-2 sm:grid-cols-3 lg:grid-cols-7">
+      {/* Spot price — larger, full-width on mobile */}
+      <Card className="bg-white border-zinc-200 p-3 border-l-2 border-l-violet-500 col-span-2 sm:col-span-3 lg:col-span-1">
         <p className="text-[9px] font-bold tracking-widest text-zinc-500 mb-1 uppercase">
           {symbol} SPOT
         </p>

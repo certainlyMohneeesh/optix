@@ -110,14 +110,14 @@ export function OptionChainTable({
   return (
     <div className="space-y-3">
       {/* Toolbar */}
-      <div className="flex gap-2 flex-wrap items-center">
+      <div className="flex gap-1.5 flex-wrap items-center">
         <span className="text-[9px] font-bold tracking-widest text-zinc-500 uppercase">Metric</span>
         {(Object.entries(METRICS) as [MetricKey, { label: string }][]).map(([k, { label }]) => (
           <Button
             key={k}
             size="sm"
             variant="ghost"
-            className={`h-6 px-2.5 text-[10px] font-bold rounded-full border ${
+            className={`h-6 px-2 text-[10px] font-bold rounded-full border ${
               metric === k
                 ? "bg-violet-500/20 text-violet-600 border-violet-500/30"
                 : "text-zinc-500 border-transparent hover:text-zinc-500"
@@ -127,13 +127,13 @@ export function OptionChainTable({
             {label}
           </Button>
         ))}
-        <span className="text-[9px] font-bold tracking-widest text-zinc-500 uppercase ml-3">Filter</span>
+        <span className="text-[9px] font-bold tracking-widest text-zinc-500 uppercase ml-1">Filter</span>
         {FILTERS.map(([k, v]) => (
           <Button
             key={k}
             size="sm"
             variant="ghost"
-            className={`h-6 px-2.5 text-[10px] font-bold rounded-full border ${
+            className={`h-6 px-2 text-[10px] font-bold rounded-full border ${
               filter === k
                 ? "bg-blue-500/20 text-blue-600 border-blue-500/30"
                 : "text-zinc-500 border-transparent hover:text-zinc-500"
