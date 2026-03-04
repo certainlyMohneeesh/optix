@@ -23,11 +23,13 @@ export async function GET(
   // ── Login redirect ──────────────────────────────────────────────────────────
   if (action === "login") {
     if (!API_KEY) {
+      console.error("[zerodha auth] ZERODHA_API_KEY not set in env");
       return NextResponse.json(
         { error: "ZERODHA_API_KEY not set in env" },
         { status: 500 }
       );
     }
+    console.log("[zerodha auth] redirecting to Kite Connect login");
     const loginUrl = `https://kite.zerodha.com/connect/login?v=3&api_key=${API_KEY}`;
     return NextResponse.redirect(loginUrl);
   }
@@ -36,8 +38,11 @@ export async function GET(
   if (action === "callback") {
     const requestToken = req.nextUrl.searchParams.get("request_token");
     if (!requestToken) {
+      console.error("[zerodha auth] callback missing request_token");
       return NextResponse.json({ error: "No request_token" }, { status: 400 });
     }
+
+    console.log("[zerodha auth] received request_token, computing checksum…");
 
     // Compute SHA-256(api_key + request_token + api_secret)
     const checksum = await sha256(`${API_KEY}${requestToken}${API_SECRET}`);
@@ -57,17 +62,37 @@ export async function GET(
 
     if (!sessionRes.ok) {
       const err = await sessionRes.text();
+      console.error("[zerodha auth] session exchange failed:", err);
       return NextResponse.json({ error: err }, { status: 500 });
     }
 
     const json = await sessionRes.json();
     const access_token: string = json?.data?.access_token;
     if (!access_token) {
+      console.error("[zerodha auth] no access_token in session response");
       return NextResponse.json({ error: "No access_token in response" }, { status: 500 });
     }
 
+    console.log(`[zerodha auth] access_token obtained (len=${access_token.length}), pushing to ws-server…`);
+
+    // Push fresh token + api_key to ws-server (fire-and-forget, non-blocking)
+    // Encode as "api_key:access_token" so the WS server can split them
+    const wsPort   = process.env.WS_PORT ?? "8765";
+    const wsSecret = process.env.WS_INTERNAL_SECRET ?? "";
+    fetch(`http://localhost:${wsPort}/token`, {
+      method:  "POST",
+      headers: {
+        "Content-Type":      "application/json",
+        "X-Internal-Secret": wsSecret,
+      },
+      body: JSON.stringify({ access_token: `${API_KEY}:${access_token}`, broker: "zerodha" }),
+    })
+      .then((r) => console.log(`[zerodha auth] ws-server token push → ${r.status}`))
+      .catch((e) => console.warn("[zerodha auth] ws-server token push failed:", e.message));
+
     // Store as cookie and redirect to app
-    const res = NextResponse.redirect(new URL("/", req.url));
+    const appOrigin = process.env.NEXTAUTH_URL ?? new URL(req.url).origin;
+    const res = NextResponse.redirect(new URL("/", appOrigin));
     res.cookies.set("zerodha_access_token", access_token, {
       httpOnly: true,
       secure:   process.env.NODE_ENV === "production",
@@ -76,6 +101,7 @@ export async function GET(
       maxAge:   60 * 60 * 23,
       path:     "/",
     });
+    console.log("[zerodha auth] cookie set, redirecting to /");
     return res;
   }
 
