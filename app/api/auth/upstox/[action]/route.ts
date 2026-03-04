@@ -106,7 +106,9 @@ ${hint ? `<p style="color:#fbbf24">${hint}</p>` : ""}
     }).catch((e) => console.warn("[Auth] ws-server token push failed:", e.message));
 
     // Set in http-only cookie + redirect to app
-    const res = NextResponse.redirect(new URL("/", req.url));
+    // Use NEXTAUTH_URL if set (production), otherwise fall back to req.url origin
+    const appOrigin = process.env.NEXTAUTH_URL ?? new URL(req.url).origin;
+    const res = NextResponse.redirect(new URL("/", appOrigin));
     res.cookies.set("upstox_access_token", access_token, {
       httpOnly: true,
       secure:   process.env.NODE_ENV === "production",
