@@ -93,6 +93,18 @@ ${hint ? `<p style="color:#fbbf24">${hint}</p>` : ""}
 
     const { access_token } = await tokenRes.json();
 
+    // Push fresh token to the ws-server (fire-and-forget, non-blocking)
+    const wsPort   = process.env.WS_PORT ?? "8765";
+    const wsSecret = process.env.WS_INTERNAL_SECRET ?? "";
+    fetch(`http://localhost:${wsPort}/token`, {
+      method:  "POST",
+      headers: {
+        "Content-Type":     "application/json",
+        "X-Internal-Secret": wsSecret,
+      },
+      body: JSON.stringify({ access_token, broker: "upstox" }),
+    }).catch((e) => console.warn("[Auth] ws-server token push failed:", e.message));
+
     // Set in http-only cookie + redirect to app
     const res = NextResponse.redirect(new URL("/", req.url));
     res.cookies.set("upstox_access_token", access_token, {

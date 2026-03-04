@@ -16,7 +16,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { Separator } from "@/components/ui/separator";
-import { Activity, RefreshCw, Settings, Zap, BarChart2 } from "lucide-react";
+import { Activity, RefreshCw, Settings, Zap, BarChart2, LogIn } from "lucide-react";
 import { SYMBOLS, EXPIRIES } from "@/lib/mock-data";
 import { fTime } from "@/lib/formatters";
 import type { Broker, Symbol, ViewTab, ConnectionStatus } from "@/lib/types";
@@ -39,10 +39,11 @@ interface HeaderProps {
 }
 
 const STATUS_CONFIG: Record<ConnectionStatus, { label: string; class: string }> = {
-  demo:        { label: "DEMO",        class: "bg-yellow-500/20 text-yellow-600 border-yellow-500/30" },
-  connecting:  { label: "CONNECTING",  class: "bg-blue-500/20 text-blue-600 border-blue-500/30" },
-  connected:   { label: "LIVE",        class: "bg-green-500/20 text-green-700 border-green-500/30" },
-  error:       { label: "ERROR",       class: "bg-red-500/20 text-red-600 border-red-500/30" },
+  demo:          { label: "DEMO",        class: "bg-yellow-500/20 text-yellow-600 border-yellow-500/30" },
+  connecting:    { label: "CONNECTING",  class: "bg-blue-500/20 text-blue-600 border-blue-500/30" },
+  connected:     { label: "LIVE",        class: "bg-green-500/20 text-green-700 border-green-500/30" },
+  error:         { label: "ERROR",       class: "bg-red-500/20 text-red-600 border-red-500/30" },
+  auth_required: { label: "LOGIN",       class: "bg-orange-500/20 text-orange-600 border-orange-500/30" },
 };
 
 export function Header({
@@ -140,6 +141,7 @@ export function Header({
         {/* Right side */}
         <div className="ml-auto flex items-center gap-3">
           <span
+            suppressHydrationWarning
             className={`text-xs font-mono transition-colors duration-300 ${
               tickAnim ? "text-cyan-700" : "text-zinc-500"
             }`}
@@ -196,6 +198,19 @@ export function Header({
             )}
             {status.label}
           </Badge>
+
+          {/* Login button — shown when token is expired or missing */}
+          {connStatus === "auth_required" && (
+            <a href={`/api/auth/${broker}/login`}>
+              <Button
+                size="sm"
+                className="h-7 px-3 text-xs font-bold bg-orange-500 hover:bg-orange-600 text-white gap-1"
+              >
+                <LogIn className="h-3 w-3" />
+                Login
+              </Button>
+            </a>
+          )}
         </div>
       </div>
     </header>

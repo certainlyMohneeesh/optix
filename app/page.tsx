@@ -41,7 +41,7 @@ export default function Home() {
     enabled: oc.liveMode,
     instruments: allInstruments,
     onTicks,
-    onStatusChange: () => {},
+    onStatusChange: oc.setConnStatus,
   });
 
   const isLoading = oc.chain.length === 0;

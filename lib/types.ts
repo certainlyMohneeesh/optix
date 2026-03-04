@@ -172,7 +172,7 @@ export interface ZerodhaQuote {
 export type ViewTab = "chain" | "analytics" | "greeks" | "setup";
 export type MetricKey = "oi" | "ltp" | "volume" | "ltpvol" | "iv";
 export type FilterKey = "all" | "itm" | "otm" | "atm";
-export type ConnectionStatus = "demo" | "connecting" | "connected" | "error";
+export type ConnectionStatus = "demo" | "connecting" | "connected" | "error" | "auth_required";
 
 // ── Supabase snapshot row ─────────────────────────────────────────────────────
 export interface SnapshotRow {

@@ -2,7 +2,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 //  STANDALONE WEBSOCKET PROXY SERVER
 //  Run with: bun run ws-server/index.ts
-//  PORT: 8080 (configurable via WS_PORT env)
+//  PORT: 8765 (configurable via WS_PORT env)
 //
 //  This server:
 //   1. Connects to Upstox v3 Market Data Feed (protobuf binary)
@@ -10,28 +10,68 @@
 //   2. Decodes ticks
 //   3. Broadcasts normalised JSON to all connected frontend clients
 //
-//  Frontend connects to: ws://localhost:8080
+//  Frontend connects to: ws://localhost:8765
 // ─────────────────────────────────────────────────────────────────────────────
 import { WebSocket, WebSocketServer } from "ws";
 import * as http from "http";
 
-const PORT = Number(process.env.WS_PORT ?? 8080);
+const PORT = Number(process.env.WS_PORT ?? 8765);
 
 // ── Credentials (set in env or ws-server/.env) ────────────────────────────────
-const UPSTOX_ACCESS_TOKEN  = process.env.UPSTOX_ACCESS_TOKEN ?? "";
-const ZERODHA_API_KEY      = process.env.ZERODHA_API_KEY ?? "";
-const ZERODHA_ACCESS_TOKEN = process.env.ZERODHA_ACCESS_TOKEN ?? "";
+// Tokens are mutable — the Next.js OAuth callback POSTs fresh tokens via POST /token
+let UPSTOX_ACCESS_TOKEN  = process.env.UPSTOX_ACCESS_TOKEN ?? "";
+let ZERODHA_API_KEY      = process.env.ZERODHA_API_KEY ?? "";
+let ZERODHA_ACCESS_TOKEN = process.env.ZERODHA_ACCESS_TOKEN ?? "";
 const BROKER               = (process.env.BROKER ?? "upstox") as "upstox" | "zerodha";
+const WS_INTERNAL_SECRET   = process.env.WS_INTERNAL_SECRET ?? "";
 
-// ── HTTP Server (health-check) ────────────────────────────────────────────────
+// ── HTTP Server (health-check + internal token push) ─────────────────────────
 const httpServer = http.createServer((req, res) => {
-  if (req.url === "/health") {
+  if (req.url === "/health" && req.method === "GET") {
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ status: "ok", broker: BROKER, uptime: process.uptime() }));
-  } else {
-    res.writeHead(404);
-    res.end();
+    return;
   }
+
+  // POST /token — Next.js OAuth callback pushes a fresh access token here
+  // Header: X-Internal-Secret must match WS_INTERNAL_SECRET env var (if set)
+  if (req.url === "/token" && req.method === "POST") {
+    const secret = req.headers["x-internal-secret"] ?? "";
+    if (WS_INTERNAL_SECRET && secret !== WS_INTERNAL_SECRET) {
+      res.writeHead(403);
+      res.end(JSON.stringify({ error: "Forbidden" }));
+      return;
+    }
+    let body = "";
+    req.on("data", (chunk) => { body += chunk; });
+    req.on("end", () => {
+      try {
+        const { access_token, broker } = JSON.parse(body);
+        if (!access_token) throw new Error("access_token missing");
+        if (broker === "zerodha") {
+          const parts = access_token.split(":");
+          ZERODHA_API_KEY      = parts[0] ?? ZERODHA_API_KEY;
+          ZERODHA_ACCESS_TOKEN = parts[1] ?? access_token;
+          console.log("[WS Proxy] Zerodha token updated — reconnecting");
+          connectZerodha();
+        } else {
+          UPSTOX_ACCESS_TOKEN = access_token;
+          console.log("[WS Proxy] Upstox token updated — reconnecting");
+          if (upstoxWs) { upstoxWs.terminate(); upstoxWs = null; }
+          connectUpstox();
+        }
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ ok: true }));
+      } catch (e) {
+        res.writeHead(400);
+        res.end(JSON.stringify({ error: String(e) }));
+      }
+    });
+    return;
+  }
+
+  res.writeHead(404);
+  res.end();
 });
 
 // ── WebSocket Server (clients = Next.js frontend) ────────────────────────────
@@ -73,7 +113,8 @@ let pendingInstruments: string[] = [];
 
 async function connectUpstox() {
   if (!UPSTOX_ACCESS_TOKEN) {
-    console.warn("[Upstox WS] No access token — broadcasting mock ticks");
+    console.warn("[Upstox WS] No access token — broadcasting mock ticks. Log in via the app to activate live feed.");
+    broadcast({ type: "status", status: "auth_required", broker: "upstox" });
     startMockBroadcast();
     return;
   }
@@ -84,6 +125,14 @@ async function connectUpstox() {
       "https://api.upstox.com/v3/feed/market-data-feed/authorize",
       { headers: { Authorization: `Bearer ${UPSTOX_ACCESS_TOKEN}` } }
     );
+    if (authRes.status === 401) {
+      // Token expired — clear it so we fall back to mock mode and notify clients
+      console.warn("[Upstox WS] Token expired (401) — waiting for fresh token via POST /token");
+      UPSTOX_ACCESS_TOKEN = "";
+      broadcast({ type: "status", status: "auth_required", broker: "upstox" });
+      startMockBroadcast();
+      return;
+    }
     if (!authRes.ok) throw new Error(`Auth failed ${authRes.status}`);
     const { data } = await authRes.json();
     const wsUrl: string = data.authorizedRedirectUri;
@@ -248,13 +297,28 @@ function startMockBroadcast() {
 }
 
 // ── Start ─────────────────────────────────────────────────────────────────────
-httpServer.listen(PORT, () => {
-  console.log(`[WS Proxy] HTTP health: http://localhost:${PORT}/health`);
-  console.log(`[WS Proxy] WebSocket: ws://localhost:${PORT}`);
-  console.log(`[WS Proxy] Broker: ${BROKER}`);
-  if (BROKER === "upstox") {
-    connectUpstox();
-  } else {
-    connectZerodha();
-  }
-});
+function startServer(port: number) {
+  httpServer.listen(port, () => {
+    console.log(`[WS Proxy] HTTP health: http://localhost:${port}/health`);
+    console.log(`[WS Proxy] WebSocket: ws://localhost:${port}`);
+    console.log(`[WS Proxy] Broker: ${BROKER}`);
+    if (BROKER === "upstox") {
+      connectUpstox();
+    } else {
+      connectZerodha();
+    }
+  });
+
+  httpServer.on("error", (err: NodeJS.ErrnoException) => {
+    if (err.code === "EADDRINUSE") {
+      console.warn(`[WS Proxy] Port ${port} in use, trying ${port + 1}...`);
+      httpServer.removeAllListeners("error");
+      httpServer.close();
+      startServer(port + 1);
+    } else {
+      throw err;
+    }
+  });
+}
+
+startServer(PORT);

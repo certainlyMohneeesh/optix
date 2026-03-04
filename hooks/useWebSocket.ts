@@ -19,7 +19,7 @@ interface UseWebSocketOptions {
   onStatusChange?: (status: ConnectionStatus) => void;
 }
 
-const WS_URL = process.env.NEXT_PUBLIC_WS_SERVER_URL ?? "ws://localhost:8080";
+const WS_URL = process.env.NEXT_PUBLIC_WS_SERVER_URL ?? "ws://localhost:8765";
 
 export function useWebSocket({
   enabled,
@@ -69,14 +69,15 @@ export function useWebSocket({
         if (msg.type === "ticks" && msg.ticks) {
           onTicks(msg.ticks);
         } else if (msg.type === "status" && msg.status) {
-          updateStatus(msg.status);
+          updateStatus(msg.status as ConnectionStatus);
         }
         // heartbeat — do nothing
       } catch { /* ignore parse errors */ }
     };
 
-    ws.onerror = (err) => {
-      console.error("[WS] Error", err);
+    ws.onerror = (evt) => {
+      const msg = evt instanceof ErrorEvent ? evt.message : "WebSocket connection failed";
+      console.error("[WS] Error:", msg);
       updateStatus("error");
     };
 
@@ -93,8 +94,10 @@ export function useWebSocket({
     if (reconnectRef.current) clearTimeout(reconnectRef.current);
     wsRef.current?.close();
     wsRef.current = null;
-    updateStatus("demo");
-  }, [updateStatus]);
+    // Only update local wsStatus — don't reset parent connStatus when user
+    // intentionally pauses live mode (REST-derived status should be preserved)
+    setWsStatus("demo");
+  }, []);
 
   // Re-subscribe when instrument list changes
   useEffect(() => {
