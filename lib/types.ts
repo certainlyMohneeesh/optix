@@ -86,6 +86,7 @@ export interface ZerodhaTick {
 // ── Upstox REST option chain response shape ──────────────────────────────────
 export interface UpstoxOptionChainItem {
   strike_price: number;
+  underlying_spot_price?: number; // present in option/chain response
   call_options: {
     instrument_key: string;
     market_data: {
@@ -172,7 +173,7 @@ export interface ZerodhaQuote {
 export type ViewTab = "chain" | "analytics" | "greeks" | "setup";
 export type MetricKey = "oi" | "ltp" | "volume" | "ltpvol" | "iv";
 export type FilterKey = "all" | "itm" | "otm" | "atm";
-export type ConnectionStatus = "demo" | "connecting" | "connected" | "error" | "auth_required";
+export type ConnectionStatus = "demo" | "connecting" | "connected" | "error" | "auth_required" | "reconnecting";
 
 // ── Supabase snapshot row ─────────────────────────────────────────────────────
 export interface SnapshotRow {

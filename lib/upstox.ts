@@ -9,6 +9,35 @@ import { expiryToAPI } from "./formatters";
 
 const UPSTOX_BASE = "https://api.upstox.com";
 
+const MONTHS_SHORT = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+
+/** Convert YYYY-MM-DD (Upstox API) → DD-Mon-YYYY (display) */
+function apiDateToDisplay(d: string): string {
+  const [y, m, day] = d.split("-");
+  return `${day}-${MONTHS_SHORT[Number(m) - 1]}-${y}`;
+}
+
+/** Fetch available option expiry dates for a symbol from Upstox API */
+export async function fetchUpstoxExpiries(
+  symbol: Symbol,
+  accessToken: string
+): Promise<string[]> {
+  const instrumentKey = UPSTOX_INSTRUMENTS[symbol];
+  const url = `${UPSTOX_BASE}/v2/option/contract?instrument_key=${encodeURIComponent(instrumentKey)}`;
+  const res = await fetch(url, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+    next: { revalidate: 300 }, // cache 5 min — expiry list changes rarely during the day
+  });
+  if (!res.ok) throw new Error(`Upstox expiries ${res.status}: ${await res.text()}`);
+  const json = await res.json();
+  // Response: { data: [ { expiry: "2026-03-06", instrument_key: "...", ... }, ... ] }
+  // Extract unique expiry date strings and deduplicate
+  const contracts: Array<Record<string, unknown>> = (json.data ?? []) as Array<Record<string, unknown>>;
+  if (!contracts.length) return [];
+  const uniqueDates = [...new Set(contracts.map((c) => c.expiry as string))].sort();
+  return uniqueDates.map(apiDateToDisplay);
+}
+
 // ── Map a single option's API payload → OptionLeg ────────────────────────────
 const mapLeg = (
   side: UpstoxOptionChainItem["call_options"] | UpstoxOptionChainItem["put_options"]
@@ -52,7 +81,7 @@ export async function fetchUpstoxChain(
   symbol: Symbol,
   expiry: string, // display format: "27-Feb-2026"
   accessToken: string
-): Promise<ChainRow[]> {
+): Promise<{ chain: ChainRow[]; spot: number }> {
   const instrumentKey = UPSTOX_INSTRUMENTS[symbol];
   const expiryDate    = expiryToAPI(expiry); // → "2026-02-27"
   const url =
@@ -69,11 +98,17 @@ export async function fetchUpstoxChain(
     throw new Error(`Upstox API ${res.status}: ${body}`);
   }
   const json = await res.json();
-  // json.data = UpstoxOptionChainItem[]
-  return mapUpstoxChain((json.data ?? []) as UpstoxOptionChainItem[]);
+  const items = (json.data ?? []) as UpstoxOptionChainItem[];
+  console.log(`[upstox chain] ${symbol} ${expiryDate} → ${items.length} rows (status: ${json.status})`);
+  if (items.length === 0) {
+    console.warn(`[upstox chain] Full response:`, JSON.stringify(json).slice(0, 500));
+  }
+  // Extract underlying spot from the first item (most reliable — avoids a separate API call)
+  const spot: number = items[0]?.underlying_spot_price ?? 0;
+  return { chain: mapUpstoxChain(items), spot };
 }
 
-/** Fetch spot (LTP) for an index via Upstox market-quote */
+/** Fetch spot (LTP) for an index via Upstox market-quote/ltp as fallback */
 export async function fetchUpstoxSpot(
   symbol: Symbol,
   accessToken: string
@@ -88,9 +123,18 @@ export async function fetchUpstoxSpot(
   });
   if (!res.ok) throw new Error(`Upstox spot ${res.status}`);
   const json = await res.json();
-  // ltp is nested under the instrument key (with | replaced by _)
-  const safeKey = key.replace("|", "_");
-  return json?.data?.[safeKey]?.last_price ?? 0;
+  // Upstox returns data keyed by the instrument key with '|' replaced by ':'
+  // and spaces preserved, e.g. "NSE_INDEX:Nifty 50"
+  const data = json?.data ?? {};
+  const keys = Object.keys(data);
+  console.log(`[upstox spot] response keys:`, keys, `(looked for: ${key})`);
+  // Try both separator styles
+  const v =
+    data[key] ??
+    data[key.replace("|", ":")] ??
+    data[key.replace("|", "_")] ??
+    data[keys[0]]; // fallback: just take the first key
+  return v?.last_price ?? 0;
 }
 
 /**

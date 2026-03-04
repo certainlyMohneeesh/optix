@@ -27,6 +27,7 @@ export interface UseOptionChainReturn {
   broker:    Broker;
   symbol:    Symbol;
   expiry:    string;
+  expiries:  string[];   // live list from API, falls back to computed
   tab:       ViewTab;
   metric:    MetricKey;
   filter:    FilterKey;
@@ -44,12 +45,14 @@ export interface UseOptionChainReturn {
   setLiveMode:  (v: boolean) => void;
   refresh:      () => Promise<void>;
   applyTicks:   (ticks: Array<{ instrument_key: string; ltp: number; oi: number; volume: number }>) => void;
+  setConnStatus: (s: ConnectionStatus) => void;
 }
 
 export function useOptionChain(): UseOptionChainReturn {
   const [broker,     setBrokerRaw]   = useState<Broker>("upstox");
   const [symbol,     setSymbolRaw]   = useState<Symbol>("NIFTY");
   const [expiry,     setExpiryRaw]   = useState<string>(EXPIRIES["NIFTY"][0]);
+  const [expiries,   setExpiries]    = useState<string[]>(EXPIRIES["NIFTY"]);
   const [chain,      setChain]       = useState<ChainRow[]>([]);
   const [spot,       setSpot]        = useState<number>(SPOT_BASE["NIFTY"]);
   const [analytics,  setAnalytics]   = useState<ChainAnalytics>({
@@ -65,7 +68,14 @@ export function useOptionChain(): UseOptionChainReturn {
   const [lastTs,     setLastTs]      = useState<Date>(new Date());
   const [tickAnim,   setTickAnim]    = useState(false);
 
-  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const intervalRef  = useRef<ReturnType<typeof setInterval> | null>(null);
+  // Tracks WS connection status so REST refresh doesn't downgrade it
+  const wsStatusRef  = useRef<ConnectionStatus>("demo");
+
+  const setConnStatusSafe = useCallback((s: ConnectionStatus) => {
+    wsStatusRef.current = s;
+    setConnStatus(s);
+  }, []);
 
   // ── Derived update helpers ──────────────────────────────────────────────────
   const updateChain = useCallback(
@@ -91,7 +101,11 @@ export function useOptionChain(): UseOptionChainReturn {
       const newChain: ChainRow[] = data.chain ?? buildMockChain(symbol);
       const newSpot: number      = data.spot  ?? SPOT_BASE[symbol];
       const source: string       = data.source ?? "mock";
-      setConnStatus(source === "mock" ? "demo" : "connected");
+      // Only set REST-derived status if WS is not actively connected/reconnecting
+      const wsLive = wsStatusRef.current === "connected" || wsStatusRef.current === "reconnecting";
+      if (!wsLive) {
+        setConnStatus(source === "mock" ? "demo" : "connected");
+      }
       updateChain(newChain, newSpot);
       // Persist snapshot (non-blocking)
       if (source !== "mock") {
@@ -111,7 +125,8 @@ export function useOptionChain(): UseOptionChainReturn {
       }
     } catch (e) {
       console.error("[useOptionChain] refresh error:", e);
-      setConnStatus("error");
+      const wsLive = wsStatusRef.current === "connected" || wsStatusRef.current === "reconnecting";
+      if (!wsLive) setConnStatus("error");
       // Fall back to mock
       const mock = buildMockChain(symbol);
       updateChain(mock, SPOT_BASE[symbol]);
@@ -148,8 +163,20 @@ export function useOptionChain(): UseOptionChainReturn {
   // ── Side effects ─────────────────────────────────────────────────────────────
   // Reset expiry when symbol changes
   useEffect(() => {
-    setExpiryRaw(EXPIRIES[symbol][0]);
+    const computed = EXPIRIES[symbol];
+    setExpiryRaw(computed[0]);
     setSpot(SPOT_BASE[symbol]);
+    setExpiries(computed);
+    // Fetch live expiries from API (replaces computed list when authenticated)
+    fetch(`/api/expiries/upstox?symbol=${symbol}`)
+      .then((r) => r.json())
+      .then(({ expiries: live }: { expiries: string[] }) => {
+        if (live?.length) {
+          setExpiries(live);
+          setExpiryRaw((prev) => (live.includes(prev) ? prev : live[0]));
+        }
+      })
+      .catch(() => {}); // silently fall back to computed
   }, [symbol]);
 
   // Initial load + reload on key changes
@@ -165,14 +192,15 @@ export function useOptionChain(): UseOptionChainReturn {
     return () => { if (intervalRef.current) clearInterval(intervalRef.current); };
   }, [liveMode, refresh]);
 
-  const setBroker = useCallback((b: Broker) => { setBrokerRaw(b); setConnStatus("demo"); }, []);
+  const setBroker = useCallback((b: Broker) => { setBrokerRaw(b); wsStatusRef.current = "demo"; setConnStatus("demo"); }, []);
   const setSymbol = useCallback((s: Symbol) => { setSymbolRaw(s); }, []);
   const setExpiry = useCallback((e: string) => { setExpiryRaw(e); }, []);
 
   return {
     chain, spot, analytics,
-    broker, symbol, expiry, tab, metric, filter, liveMode, connStatus, lastTs, tickAnim,
+    broker, symbol, expiry, expiries, tab, metric, filter, liveMode, connStatus, lastTs, tickAnim,
     setBroker, setSymbol, setExpiry, setTab, setMetric, setFilter, setLiveMode,
     refresh, applyTicks,
+    setConnStatus: setConnStatusSafe,
   };
 }

@@ -138,7 +138,12 @@ async function connectUpstox() {
     const wsUrl: string = data.authorizedRedirectUri;
 
     console.log("[Upstox WS] Connecting to", wsUrl);
-    upstoxWs = new WebSocket(wsUrl);
+    upstoxWs = new WebSocket(wsUrl, {
+      headers: {
+        "Origin": "https://upstox.com",
+        "User-Agent": "Mozilla/5.0 (compatible; upstox-market-data-feed/1.0)",
+      },
+    });
     upstoxWs.binaryType = "arraybuffer";
 
     upstoxWs.on("open", () => {

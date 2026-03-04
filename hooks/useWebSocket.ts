@@ -27,20 +27,28 @@ export function useWebSocket({
   onTicks,
   onStatusChange,
 }: UseWebSocketOptions) {
-  const wsRef        = useRef<WebSocket | null>(null);
-  const reconnectRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const wsRef           = useRef<WebSocket | null>(null);
+  const reconnectRef    = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const enabledRef      = useRef(enabled);
+  const instrumentsRef  = useRef(instruments);
+  const onTicksRef      = useRef(onTicks);
+  const onStatusRef     = useRef(onStatusChange);
   const [wsStatus, setWsStatus] = useState<ConnectionStatus>("demo");
 
-  const updateStatus = useCallback(
-    (s: ConnectionStatus) => {
-      setWsStatus(s);
-      onStatusChange?.(s);
-    },
-    [onStatusChange]
-  );
+  // Keep refs in sync with latest props — no re-renders / dep changes
+  useEffect(() => { enabledRef.current     = enabled; },      [enabled]);
+  useEffect(() => { instrumentsRef.current = instruments; },  [instruments]);
+  useEffect(() => { onTicksRef.current     = onTicks; },      [onTicks]);
+  useEffect(() => { onStatusRef.current    = onStatusChange; }, [onStatusChange]);
 
+  const updateStatus = useCallback((s: ConnectionStatus) => {
+    setWsStatus(s);
+    onStatusRef.current?.(s);
+  }, []);
+
+  // connect is now stable — no instrument/onTicks deps, uses refs instead
   const connect = useCallback(() => {
-    if (!enabled || typeof window === "undefined") return;
+    if (!enabledRef.current || typeof window === "undefined") return;
     if (wsRef.current?.readyState === WebSocket.OPEN) return;
 
     console.log("[WS] Connecting to", WS_URL);
@@ -52,9 +60,9 @@ export function useWebSocket({
     ws.onopen = () => {
       console.log("[WS] Connected");
       updateStatus("connected");
-      // Subscribe to the instruments we care about
-      if (instruments.length > 0) {
-        ws.send(JSON.stringify({ type: "subscribe", instruments }));
+      const instr = instrumentsRef.current;
+      if (instr.length > 0) {
+        ws.send(JSON.stringify({ type: "subscribe", instruments: instr }));
       }
     };
 
@@ -64,49 +72,47 @@ export function useWebSocket({
           type: string;
           ticks?: WsTick[];
           status?: ConnectionStatus;
-          message?: string;
         };
         if (msg.type === "ticks" && msg.ticks) {
-          onTicks(msg.ticks);
+          onTicksRef.current(msg.ticks);
         } else if (msg.type === "status" && msg.status) {
-          updateStatus(msg.status as ConnectionStatus);
+          updateStatus(msg.status);
         }
-        // heartbeat — do nothing
       } catch { /* ignore parse errors */ }
     };
 
-    ws.onerror = (evt) => {
-      const msg = evt instanceof ErrorEvent ? evt.message : "WebSocket connection failed";
-      console.error("[WS] Error:", msg);
+    ws.onerror = () => {
+      // Browser intentionally hides WS error details for security — no message to log
       updateStatus("error");
     };
 
     ws.onclose = () => {
       console.log("[WS] Closed — will retry in 5s");
       wsRef.current = null;
-      if (enabled) {
+      if (enabledRef.current) {
         reconnectRef.current = setTimeout(connect, 5000);
       }
     };
-  }, [enabled, instruments, onTicks, updateStatus]);
+  }, [updateStatus]); // stable — no instruments/onTicks deps
 
   const disconnect = useCallback(() => {
     if (reconnectRef.current) clearTimeout(reconnectRef.current);
     wsRef.current?.close();
     wsRef.current = null;
-    // Only update local wsStatus — don't reset parent connStatus when user
-    // intentionally pauses live mode (REST-derived status should be preserved)
     setWsStatus("demo");
   }, []);
 
-  // Re-subscribe when instrument list changes
+  // Re-subscribe when instrument list *actually* changes (not just reference changes)
+  const lastSubKey = useRef<string>("");
   useEffect(() => {
-    if (wsRef.current?.readyState === WebSocket.OPEN && instruments.length > 0) {
-      wsRef.current.send(JSON.stringify({ type: "subscribe", instruments }));
-    }
+    if (wsRef.current?.readyState !== WebSocket.OPEN || instruments.length === 0) return;
+    const key = instruments.join(",");
+    if (key === lastSubKey.current) return; // same instruments — skip
+    lastSubKey.current = key;
+    wsRef.current.send(JSON.stringify({ type: "subscribe", instruments }));
   }, [instruments]);
 
-  // Connect / disconnect when enabled changes
+  // Connect / disconnect only when enabled changes — stable connect/disconnect means no storm
   useEffect(() => {
     if (enabled) {
       connect();
@@ -114,7 +120,7 @@ export function useWebSocket({
       disconnect();
     }
     return disconnect;
-  }, [enabled, connect, disconnect]);
+  }, [enabled]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return { wsStatus };
 }

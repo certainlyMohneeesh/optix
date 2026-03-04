@@ -3,7 +3,7 @@
 //  OPTIX — Option Chain Dashboard
 //  Main page — wires all components together
 // ─────────────────────────────────────────────────────────────────────────────
-import { useCallback } from "react";
+import { useCallback, useMemo } from "react";
 import { Header }           from "@/components/layout/Header";
 import { StatStrip }        from "@/components/option-chain/StatStrip";
 import { OptionChainTable } from "@/components/option-chain/OptionChainTable";
@@ -21,12 +21,15 @@ export default function Home() {
   const oc = useOptionChain();
 
   // ── Collect all instrument keys for WS subscription ─────────────────────
-  const instruments = oc.chain.flatMap((row) => [
-    row.call.instrument_key,
-    row.put.instrument_key,
-  ]);
-  const indexKey = UPSTOX_INSTRUMENTS[oc.symbol];
-  const allInstruments = [indexKey, ...instruments];
+  // useMemo: instrument keys only change when expiry/symbol changes (not on every tick)
+  const allInstruments = useMemo(() => {
+    const optionKeys = oc.chain.flatMap((row) => [
+      row.call.instrument_key,
+      row.put.instrument_key,
+    ]);
+    return [UPSTOX_INSTRUMENTS[oc.symbol], ...optionKeys];
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [oc.symbol, oc.expiry, oc.chain.length]); // chain.length changes on load, not on ticks
 
   // ── WebSocket ticks → chain updates ─────────────────────────────────────
   const onTicks = useCallback(
@@ -53,6 +56,7 @@ export default function Home() {
         broker={oc.broker}
         symbol={oc.symbol}
         expiry={oc.expiry}
+        expiries={oc.expiries}
         tab={oc.tab}
         liveMode={oc.liveMode}
         connStatus={oc.connStatus}

@@ -6,6 +6,58 @@ import type { ChainRow, OptionLeg, Symbol } from "./types";
 
 export const SYMBOLS: Symbol[] = ["NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "SENSEX"];
 
+// ── Expiry date generator ──────────────────────────────────────────────────────────────
+const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+
+function fmt(d: Date): string {
+  return `${String(d.getDate()).padStart(2,"0")}-${MONTHS[d.getMonth()]}-${d.getFullYear()}`;
+}
+
+/** Next N occurrences of a given weekday (0=Sun,1=Mon,...,6=Sat) starting from today */
+function nextWeekdays(weekday: number, count: number): string[] {
+  const result: string[] = [];
+  const d = new Date();
+  d.setHours(0, 0, 0, 0);
+  const daysUntil = (weekday - d.getDay() + 7) % 7;
+  d.setDate(d.getDate() + (daysUntil === 0 ? 0 : daysUntil));
+  for (let i = 0; i < count; i++) {
+    result.push(fmt(new Date(d)));
+    d.setDate(d.getDate() + 7);
+  }
+  return result;
+}
+
+/** Last occurrence of a weekday in each of the next N months */
+function lastWeekdayOfMonths(weekday: number, count: number): string[] {
+  const result: string[] = [];
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  let month = today.getMonth();
+  let year  = today.getFullYear();
+  for (let i = 0; i < count + 2 && result.length < count; i++) {
+    // Last day of month
+    const lastDay = new Date(year, month + 1, 0);
+    // Walk back to the target weekday
+    const diff = (lastDay.getDay() - weekday + 7) % 7;
+    lastDay.setDate(lastDay.getDate() - diff);
+    if (lastDay >= today) result.push(fmt(lastDay));
+    month++;
+    if (month > 11) { month = 0; year++; }
+  }
+  return result;
+}
+
+// Expiries are computed fresh each time they are read (no stale hardcoded dates)
+// NIFTY/BANKNIFTY: weekly Thursday  | FINNIFTY: weekly Tuesday
+// MIDCPNIFTY: monthly last Monday   | SENSEX: weekly Friday
+export const EXPIRIES: Record<Symbol, string[]> = {
+  get NIFTY()      { return nextWeekdays(4, 5); },   // Thu
+  get BANKNIFTY()  { return nextWeekdays(4, 4); },   // Thu
+  get FINNIFTY()   { return nextWeekdays(2, 4); },   // Tue
+  get MIDCPNIFTY() { return lastWeekdayOfMonths(1, 3); }, // last Mon
+  get SENSEX()     { return nextWeekdays(5, 4); },   // Fri
+};
+
 export const SPOT_BASE: Record<Symbol, number> = {
   NIFTY:      22487.5,
   BANKNIFTY:  48312.3,
@@ -29,14 +81,6 @@ export const UPSTOX_INSTRUMENTS: Record<Symbol, string> = {
   FINNIFTY:   "NSE_INDEX|Nifty Fin Service",
   MIDCPNIFTY: "NSE_INDEX|Nifty Midcap Select",
   SENSEX:     "BSE_INDEX|SENSEX",
-};
-
-export const EXPIRIES: Record<Symbol, string[]> = {
-  NIFTY:      ["27-Feb-2026","06-Mar-2026","13-Mar-2026","27-Mar-2026","24-Apr-2026"],
-  BANKNIFTY:  ["26-Feb-2026","04-Mar-2026","11-Mar-2026","25-Mar-2026"],
-  FINNIFTY:   ["25-Feb-2026","04-Mar-2026","25-Mar-2026"],
-  MIDCPNIFTY: ["31-Mar-2026","28-Apr-2026"],
-  SENSEX:     ["28-Feb-2026","31-Mar-2026"],
 };
 
 // ── Mock single option leg ────────────────────────────────────────────────────

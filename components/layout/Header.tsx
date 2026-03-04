@@ -25,6 +25,7 @@ interface HeaderProps {
   broker:     Broker;
   symbol:     Symbol;
   expiry:     string;
+  expiries:   string[];  // live list from API / computed
   tab:        ViewTab;
   liveMode:   boolean;
   connStatus: ConnectionStatus;
@@ -39,19 +40,24 @@ interface HeaderProps {
 }
 
 const STATUS_CONFIG: Record<ConnectionStatus, { label: string; class: string }> = {
-  demo:          { label: "DEMO",        class: "bg-yellow-500/20 text-yellow-600 border-yellow-500/30" },
-  connecting:    { label: "CONNECTING",  class: "bg-blue-500/20 text-blue-600 border-blue-500/30" },
-  connected:     { label: "LIVE",        class: "bg-green-500/20 text-green-700 border-green-500/30" },
-  error:         { label: "ERROR",       class: "bg-red-500/20 text-red-600 border-red-500/30" },
-  auth_required: { label: "LOGIN",       class: "bg-orange-500/20 text-orange-600 border-orange-500/30" },
+  demo:          { label: "DEMO",         class: "bg-yellow-500/20 text-yellow-600 border-yellow-500/30" },
+  connecting:    { label: "CONNECTING",   class: "bg-blue-500/20 text-blue-600 border-blue-500/30" },
+  connected:     { label: "LIVE",         class: "bg-green-500/20 text-green-700 border-green-500/30" },
+  reconnecting:  { label: "RECONNECTING", class: "bg-blue-500/20 text-blue-500 border-blue-500/30" },
+  error:         { label: "ERROR",        class: "bg-red-500/20 text-red-600 border-red-500/30" },
+  auth_required: { label: "LOGIN",        class: "bg-orange-500/20 text-orange-600 border-orange-500/30" },
 };
 
+// Fallback so undefined statuses never crash
+const getStatus = (s: ConnectionStatus) =>
+  STATUS_CONFIG[s] ?? STATUS_CONFIG.error;
+
 export function Header({
-  broker, symbol, expiry, tab, liveMode, connStatus, lastTs, tickAnim,
+  broker, symbol, expiry, expiries, tab, liveMode, connStatus, lastTs, tickAnim,
   onBroker, onSymbol, onExpiry, onTab, onLive, onRefresh,
 }: HeaderProps) {
-  const expiryList = EXPIRIES[symbol] ?? [];
-  const status = STATUS_CONFIG[connStatus];
+  const expiryList = expiries.length ? expiries : (EXPIRIES[symbol] ?? []);
+  const status = getStatus(connStatus);
 
   return (
     <header className="sticky top-0 z-50 border-b border-zinc-200 bg-white/95 backdrop-blur">
@@ -199,8 +205,8 @@ export function Header({
             {status.label}
           </Badge>
 
-          {/* Login button — shown when token is expired or missing */}
-          {connStatus === "auth_required" && (
+          {/* Login button — shown when not authenticated (demo or expired token) */}
+          {(connStatus === "auth_required" || connStatus === "demo") && (
             <a href={`/api/auth/${broker}/login`}>
               <Button
                 size="sm"
