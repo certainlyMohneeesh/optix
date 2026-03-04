@@ -164,7 +164,40 @@ export const applyZerodhaTicks = (
   });
 };
 
-// ── CSV parser for Kite instruments ──────────────────────────────────────────
+/** Fetch available expiry dates for a symbol from Kite instruments CSV */
+export async function fetchZerodhaExpiries(
+  symbol: Symbol,
+  apiKey: string,
+  accessToken: string
+): Promise<string[]> {
+  const headers = kiteHeaders(apiKey, accessToken);
+  const instRes = await fetch(`${KITE_BASE}/instruments/NFO`, { headers });
+  if (!instRes.ok) throw new Error(`Kite instruments ${instRes.status}`);
+  const csvText: string = await instRes.text();
+
+  const instruments = parseKiteInstrumentCSV(csvText).filter(
+    (i) =>
+      i.name === symbol &&
+      i.instrument_type === "CE" &&
+      i.expiry // has a valid expiry
+  );
+
+  // Deduplicate, sort, and convert from "YYYY-MM-DD" to display format "27-Feb-2026"
+  const unique = [...new Set(instruments.map((i) => i.expiry))].sort();
+  const today  = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  return unique
+    .filter((d) => new Date(d) >= today) // future expiries only
+    .map((d) => {
+      const dt = new Date(d + "T00:00:00Z");
+      return dt.toLocaleDateString("en-GB", {
+        day: "2-digit", month: "short", year: "numeric", timeZone: "UTC",
+      }).replace(/ /g, "-"); // "27-Feb-2026"
+    });
+}
+
+
 function parseKiteInstrumentCSV(csv: string): ZerodhaInstrument[] {
   const lines = csv.trim().split("\n");
   if (lines.length < 2) return [];
