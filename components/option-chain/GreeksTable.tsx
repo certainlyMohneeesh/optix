@@ -77,7 +77,7 @@ export function GreeksTable({ chain, symbol, spot }: GreeksTableProps) {
                   {vega}
                 </td>
                 <td className={td} style={{ color: "#94a3b8" }}>
-                  ₹{(ltp_volume / 1000).toFixed(0)}K
+                  ₹{(ltp_volume / 10_000_000).toFixed(2)}Cr
                 </td>
                 <td className="px-3 py-1 text-right font-mono text-[11px] text-zinc-500">
                   {fn(day_high)}
