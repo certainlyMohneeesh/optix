@@ -1,6 +1,6 @@
 "use client";
+import { useRef, useEffect } from "react";
 import { Button } from "@/components/ui/button";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { filterChain } from "@/lib/calculations";
 import { fn, fOI, fChg, fPct, oiChangeColor } from "@/lib/formatters";
@@ -107,6 +107,25 @@ export function OptionChainTable({
   const maxPain  = analytics.maxPain;
   const filtered = filterChain(chain, spot, step, filter);
 
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const atmRowRef          = useRef<HTMLTableRowElement>(null);
+
+  // On every data refresh: horizontally center the strike column so both
+  // calls (left) and puts (right) are reachable by swiping.
+  useEffect(() => {
+    const el = scrollContainerRef.current;
+    if (!el) return;
+    // Scroll to horizontal center (where the STRIKE column sits)
+    requestAnimationFrame(() => {
+      el.scrollLeft = (el.scrollWidth - el.clientWidth) / 2;
+    });
+  }, [filtered]);
+
+  // Scroll ATM row into vertical view
+  useEffect(() => {
+    atmRowRef.current?.scrollIntoView({ block: "center", behavior: "smooth" });
+  }, [filtered]);
+
   return (
     <div className="space-y-3">
       {/* Toolbar */}
@@ -145,8 +164,12 @@ export function OptionChainTable({
         ))}
       </div>
 
-      {/* Table */}
-      <ScrollArea className="w-full">
+      {/* Table – native overflow-x-auto for reliable touch scrolling on mobile */}
+      <div
+        ref={scrollContainerRef}
+        className="w-full overflow-x-auto"
+        style={{ WebkitOverflowScrolling: "touch" }}
+      >
         <table className="w-full border-collapse text-[11px]" style={{ minWidth: 900 }}>
           <thead>
             <tr>
@@ -195,6 +218,7 @@ export function OptionChainTable({
               return (
                 <tr
                   key={strike}
+                  ref={isATM ? atmRowRef : undefined}
                   className={`border-b border-zinc-200 transition-colors hover:bg-black/[0.03] cursor-default ${
                     isATM ? "bg-violet-500/[0.05]" : ""
                   }`}
@@ -278,7 +302,7 @@ export function OptionChainTable({
             })}
           </tbody>
         </table>
-      </ScrollArea>
+      </div>
     </div>
   );
 }
