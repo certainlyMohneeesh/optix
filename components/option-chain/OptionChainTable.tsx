@@ -61,6 +61,10 @@ function getMetricBar(row: ChainRow, side: "call" | "put", metric: MetricKey, an
   }
 }
 
+// ITM quadrant background colours (very subtle tints, matching Kite/Upstox style)
+const ITM_CALL_BG = "rgba(255, 237, 213, 0.55)"; // warm amber for ITM calls
+const ITM_PUT_BG  = "rgba(220, 252, 231, 0.55)"; // soft green  for ITM puts
+
 interface BarCellProps {
   children: React.ReactNode;
   barWidth: number;
@@ -68,12 +72,16 @@ interface BarCellProps {
   align: "left" | "right";
   highlight?: boolean;
   highlightColor?: string;
+  itmBg?: string;
 }
 
-function BarCell({ children, barWidth, barColor, align, highlight, highlightColor }: BarCellProps) {
+function BarCell({ children, barWidth, barColor, align, highlight, highlightColor, itmBg }: BarCellProps) {
   const w = Math.min(100, barWidth * 100);
   return (
-    <td className={`px-2 py-1 text-[11px] font-mono relative ${align === "right" ? "text-right" : "text-left"}`}>
+    <td
+      className={`px-2 py-1 text-[11px] font-mono relative ${align === "right" ? "text-right" : "text-left"}`}
+      style={itmBg ? { background: itmBg } : undefined}
+    >
       {/* Background bar */}
       <div
         className="absolute top-1/2 -translate-y-1/2 h-[60%] rounded-sm opacity-[0.13] pointer-events-none"
@@ -181,6 +189,9 @@ export function OptionChainTable({
               const cMetricB = getMetricBar({ strike, call, put }, "call", metric, analytics);
               const pMetricB = getMetricBar({ strike, call, put }, "put", metric, analytics);
 
+              const cBg = itmC ? ITM_CALL_BG : undefined;
+              const pBg = itmP ? ITM_PUT_BG  : undefined;
+
               return (
                 <tr
                   key={strike}
@@ -189,29 +200,29 @@ export function OptionChainTable({
                   }`}
                 >
                   {/* ── CALL CELLS ── */}
-                  <td className="px-2 py-1 text-right font-mono text-[10px]" style={{ color: oiChangeColor(call.oi_change_pct) }}>
+                  <td className="px-2 py-1 text-right font-mono text-[10px]" style={{ color: oiChangeColor(call.oi_change_pct), background: cBg }}>
                     {fPct(call.oi_change_pct)}
                   </td>
-                  <td className="px-2 py-1 text-right font-mono text-[10px]" style={{ color: oiChangeColor(call.oi_change) }}>
+                  <td className="px-2 py-1 text-right font-mono text-[10px]" style={{ color: oiChangeColor(call.oi_change), background: cBg }}>
                     {fChg(call.oi_change)}
                   </td>
 
                   {/* OI with bar */}
-                  <BarCell barWidth={call.oi / analytics.maxCallOI} barColor="#f87171" align="right" highlight={itmC} highlightColor="#fca5a5">
+                  <BarCell barWidth={call.oi / analytics.maxCallOI} barColor="#f87171" align="right" highlight={itmC} highlightColor="#fca5a5" itmBg={cBg}>
                     {fOI(call.oi)}
                   </BarCell>
 
                   {/* Metric with bar */}
-                  <BarCell barWidth={cMetricB} barColor="#f87171" align="right" highlight={itmC} highlightColor="#fca5a5">
+                  <BarCell barWidth={cMetricB} barColor="#f87171" align="right" highlight={itmC} highlightColor="#fca5a5" itmBg={cBg}>
                     {cMetricV}
                   </BarCell>
 
-                  <td className="px-2 py-1 text-right font-mono text-zinc-500">{call.iv}%</td>
-                  <td className="px-2 py-1 text-right font-mono text-zinc-400">
+                  <td className="px-2 py-1 text-right font-mono text-zinc-500" style={{ background: cBg }}>{call.iv}%</td>
+                  <td className="px-2 py-1 text-right font-mono text-zinc-400" style={{ background: cBg }}>
                     {call.delta >= 0 ? "+" : ""}{call.delta}
                   </td>
-                  <td className="px-2 py-1 text-right font-mono text-zinc-400">{fn(call.bid_price)}</td>
-                  <td className={`px-2 py-1 text-right font-mono font-semibold ${itmC ? "text-red-600" : "text-zinc-400"}`}>
+                  <td className="px-2 py-1 text-right font-mono text-zinc-400" style={{ background: cBg }}>{fn(call.bid_price)}</td>
+                  <td className={`px-2 py-1 text-right font-mono font-semibold ${itmC ? "text-red-600" : "text-zinc-400"}`} style={{ background: cBg }}>
                     {fn(call.ltp)}
                   </td>
 
@@ -239,27 +250,27 @@ export function OptionChainTable({
                   </td>
 
                   {/* ── PUT CELLS ── */}
-                  <td className={`px-2 py-1 text-left font-mono font-semibold ${itmP ? "text-green-700" : "text-zinc-400"}`}>
+                  <td className={`px-2 py-1 text-left font-mono font-semibold ${itmP ? "text-green-700" : "text-zinc-400"}`} style={{ background: pBg }}>
                     {fn(put.ltp)}
                   </td>
-                  <td className="px-2 py-1 text-left font-mono text-zinc-400">{fn(put.bid_price)}</td>
-                  <td className="px-2 py-1 text-left font-mono text-zinc-400">{put.delta}</td>
-                  <td className="px-2 py-1 text-left font-mono text-zinc-500">{put.iv}%</td>
+                  <td className="px-2 py-1 text-left font-mono text-zinc-400" style={{ background: pBg }}>{fn(put.bid_price)}</td>
+                  <td className="px-2 py-1 text-left font-mono text-zinc-400" style={{ background: pBg }}>{put.delta}</td>
+                  <td className="px-2 py-1 text-left font-mono text-zinc-500" style={{ background: pBg }}>{put.iv}%</td>
 
                   {/* Metric with bar */}
-                  <BarCell barWidth={pMetricB} barColor="#34d399" align="left" highlight={itmP} highlightColor="#86efac">
+                  <BarCell barWidth={pMetricB} barColor="#34d399" align="left" highlight={itmP} highlightColor="#86efac" itmBg={pBg}>
                     {pMetricV}
                   </BarCell>
 
                   {/* OI with bar */}
-                  <BarCell barWidth={put.oi / analytics.maxPutOI} barColor="#34d399" align="left" highlight={itmP} highlightColor="#86efac">
+                  <BarCell barWidth={put.oi / analytics.maxPutOI} barColor="#34d399" align="left" highlight={itmP} highlightColor="#86efac" itmBg={pBg}>
                     {fOI(put.oi)}
                   </BarCell>
 
-                  <td className="px-2 py-1 text-left font-mono text-[10px]" style={{ color: oiChangeColor(put.oi_change) }}>
+                  <td className="px-2 py-1 text-left font-mono text-[10px]" style={{ color: oiChangeColor(put.oi_change), background: pBg }}>
                     {fChg(put.oi_change)}
                   </td>
-                  <td className="px-2 py-1 text-left font-mono text-[10px]" style={{ color: oiChangeColor(put.oi_change_pct) }}>
+                  <td className="px-2 py-1 text-left font-mono text-[10px]" style={{ color: oiChangeColor(put.oi_change_pct), background: pBg }}>
                     {fPct(put.oi_change_pct)}
                   </td>
                 </tr>
