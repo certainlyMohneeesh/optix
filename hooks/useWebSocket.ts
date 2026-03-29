@@ -12,11 +12,24 @@ interface WsTick {
   volume: number;
 }
 
+// Raw tick that may come from Zerodha (uses numeric instrument_token)
+interface RawTick {
+  instrument_key?: string;
+  instrument_token?: number;
+  ltp: number;
+  oi: number;
+  volume: number;
+}
+
 interface UseWebSocketOptions {
   enabled: boolean;
   instruments: string[];
   onTicks: (ticks: WsTick[]) => void;
   onStatusChange?: (status: ConnectionStatus) => void;
+  /** "upstox" | "zerodha" — controls subscribe payload and tick translation */
+  broker?: string;
+  /** Zerodha only: instrument_token → instrument_key ("NFO:XXX"); built by useOptionChain */
+  tokenMap?: Record<number, string>;
 }
 
 const WS_URL = process.env.NEXT_PUBLIC_WS_SERVER_URL ?? "ws://localhost:8765";
@@ -26,6 +39,8 @@ export function useWebSocket({
   instruments,
   onTicks,
   onStatusChange,
+  broker = "upstox",
+  tokenMap,
 }: UseWebSocketOptions) {
   const wsRef           = useRef<WebSocket | null>(null);
   const reconnectRef    = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -33,6 +48,8 @@ export function useWebSocket({
   const instrumentsRef  = useRef(instruments);
   const onTicksRef      = useRef(onTicks);
   const onStatusRef     = useRef(onStatusChange);
+  const brokerRef       = useRef(broker);
+  const tokenMapRef     = useRef<Record<number, string>>(tokenMap ?? {});
   const [wsStatus, setWsStatus] = useState<ConnectionStatus>("demo");
 
   // Keep refs in sync with latest props — no re-renders / dep changes
@@ -40,6 +57,8 @@ export function useWebSocket({
   useEffect(() => { instrumentsRef.current = instruments; },  [instruments]);
   useEffect(() => { onTicksRef.current     = onTicks; },      [onTicks]);
   useEffect(() => { onStatusRef.current    = onStatusChange; }, [onStatusChange]);
+  useEffect(() => { brokerRef.current      = broker; },       [broker]);
+  useEffect(() => { tokenMapRef.current    = tokenMap ?? {}; }, [tokenMap]);
 
   const updateStatus = useCallback((s: ConnectionStatus) => {
     setWsStatus(s);
@@ -62,7 +81,12 @@ export function useWebSocket({
       updateStatus("connected");
       const instr = instrumentsRef.current;
       if (instr.length > 0) {
-        ws.send(JSON.stringify({ type: "subscribe", instruments: instr }));
+        const payload: Record<string, unknown> = { type: "subscribe", instruments: instr, broker: brokerRef.current };
+        if (brokerRef.current === "zerodha") {
+          payload.tokenMap = tokenMapRef.current;
+          console.log(`[WS] Subscribing zerodha with ${Object.keys(tokenMapRef.current).length} tokens`);
+        }
+        ws.send(JSON.stringify(payload));
       }
     };
 
@@ -70,11 +94,26 @@ export function useWebSocket({
       try {
         const msg = JSON.parse(evt.data as string) as {
           type: string;
-          ticks?: WsTick[];
+          ticks?: RawTick[];
           status?: ConnectionStatus;
         };
         if (msg.type === "ticks" && msg.ticks) {
-          onTicksRef.current(msg.ticks);
+          // Translate Zerodha ticks: instrument_token → instrument_key
+          const resolved: WsTick[] = [];
+          for (const tick of msg.ticks) {
+            let key = tick.instrument_key;
+            if (!key && tick.instrument_token !== undefined) {
+              key = tokenMapRef.current[tick.instrument_token];
+              if (!key) {
+                // Unknown token — skip rather than corrupt state
+                continue;
+              }
+            }
+            if (key) {
+              resolved.push({ instrument_key: key, ltp: tick.ltp, oi: tick.oi, volume: tick.volume });
+            }
+          }
+          if (resolved.length > 0) onTicksRef.current(resolved);
         } else if (msg.type === "status" && msg.status) {
           updateStatus(msg.status);
         }
@@ -109,7 +148,9 @@ export function useWebSocket({
     const key = instruments.join(",");
     if (key === lastSubKey.current) return; // same instruments — skip
     lastSubKey.current = key;
-    wsRef.current.send(JSON.stringify({ type: "subscribe", instruments }));
+    const payload: Record<string, unknown> = { type: "subscribe", instruments, broker: brokerRef.current };
+    if (brokerRef.current === "zerodha") payload.tokenMap = tokenMapRef.current;
+    wsRef.current.send(JSON.stringify(payload));
   }, [instruments]);
 
   // Connect / disconnect only when enabled changes — stable connect/disconnect means no storm

@@ -31,12 +31,12 @@ export async function GET(req: NextRequest) {
 
   try {
     console.log(`[zerodha route] fetching chain from Kite API…`);
-    const [chain, spot] = await Promise.all([
+    const [{ chain, tokenMap }, spot] = await Promise.all([
       fetchZerodhaChain(symbol, expiry, apiKey, accessToken),
       fetchZerodhaSpot(symbol, apiKey, accessToken),
     ]);
-    console.log(`[zerodha route] chain rows=${chain.length}, spot=${spot}`);
-    return NextResponse.json({ chain, spot, source: "zerodha" });
+    console.log(`[zerodha route] chain rows=${chain.length}, spot=${spot}, tokens=${Object.keys(tokenMap).length}`);
+    return NextResponse.json({ chain, spot, tokenMap, source: "zerodha" });
   } catch (e: unknown) {
     const message = e instanceof Error ? e.message : String(e);
     console.error("[zerodha route] error:", message);

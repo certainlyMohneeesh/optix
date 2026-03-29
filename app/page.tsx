@@ -45,6 +45,8 @@ export default function Home() {
     instruments: allInstruments,
     onTicks,
     onStatusChange: oc.setConnStatus,
+    broker: oc.broker,
+    tokenMap: oc.zerodhaTokenMap,
   });
 
   const isLoading = oc.chain.length === 0;
@@ -74,15 +76,15 @@ export default function Home() {
       <main className="flex-1 px-3 py-3 sm:p-4 space-y-3 sm:space-y-4 max-w-[1800px] mx-auto w-full">
 
         {/* Demo banner */}
-        {oc.connStatus === "demo" && oc.tab !== "setup" && (
+        {oc.connStatus === "demo" && oc.tab !== "docs" && (
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1 bg-yellow-500/10 border border-yellow-500/20 rounded-lg px-3 py-2">
             <p className="text-xs text-yellow-600">
               <strong>Demo Mode</strong> — Showing simulated data. Go to{" "}
               <button
                 className="underline hover:text-yellow-300 font-semibold"
-                onClick={() => oc.setTab("setup")}
+                onClick={() => oc.setTab("docs")}
               >
-                SETUP
+                DOCS
               </button>{" "}
               to connect real API.
             </p>
@@ -171,7 +173,7 @@ export default function Home() {
         )}
 
         {/* ── Setup tab ── */}
-        {oc.tab === "setup" && <SetupPanel />}
+        {oc.tab === "docs" && <SetupPanel />}
 
       </main>
 

@@ -21,11 +21,11 @@ const kiteHeaders = (apiKey: string, accessToken: string) => ({
   Authorization: `token ${apiKey}:${accessToken}`,
 });
 
-// ── Map Zerodha instruments + quotes → ChainRow[] ────────────────────────────
+// ── Map Zerodha instruments + quotes → ChainRow[] and tokenMap ─────────────
 export const mapZerodhaChain = (
   instruments: ZerodhaInstrument[],
   quotes: Record<string, ZerodhaQuote>
-): ChainRow[] => {
+): { chain: ChainRow[]; tokenMap: Record<number, string> } => {
   // Group by strike
   const byStrike = new Map<number, { ce?: ZerodhaInstrument; pe?: ZerodhaInstrument }>();
   for (const inst of instruments) {
@@ -36,7 +36,9 @@ export const mapZerodhaChain = (
     byStrike.set(strike, entry);
   }
 
-  const rows: ChainRow[] = [];
+  const chain: ChainRow[] = [];
+  const tokenMap: Record<number, string> = {};
+
   for (const [strike, { ce, pe }] of byStrike) {
     if (!ce || !pe) continue;
     const ceKey = `NFO:${ce.tradingsymbol}`;
@@ -45,14 +47,18 @@ export const mapZerodhaChain = (
     const peQ   = quotes[peKey];
     if (!ceQ || !peQ) continue;
 
-    rows.push({
+    // Build token → instrument_key map for WS tick translation
+    tokenMap[ce.instrument_token] = ceKey;
+    tokenMap[pe.instrument_token] = peKey;
+
+    chain.push({
       strike,
       call: quoteToLeg(ce, ceQ),
       put:  quoteToLeg(pe, peQ),
     });
   }
-  rows.sort((a, b) => a.strike - b.strike);
-  return rows;
+  chain.sort((a, b) => a.strike - b.strike);
+  return { chain, tokenMap };
 };
 
 const quoteToLeg = (inst: ZerodhaInstrument, q: ZerodhaQuote): OptionLeg => {
@@ -87,11 +93,11 @@ export async function fetchZerodhaChain(
   expiry: string, // "27-Feb-2026" display format
   apiKey: string,
   accessToken: string
-): Promise<ChainRow[]> {
+): Promise<{ chain: ChainRow[]; tokenMap: Record<number, string> }> {
   const headers     = kiteHeaders(apiKey, accessToken);
   const expiryDate  = expiryToAPI(expiry); // "2026-02-27"
 
-  // Fetch all NFO instruments (cached — Kite updates this once a day)
+  // Fetch all NFO instruments (Kite updates this once a day)
   const instRes = await fetch(`${KITE_BASE}/instruments/NFO`, { headers });
   if (!instRes.ok) throw new Error(`Kite instruments ${instRes.status}`);
   const csvText: string = await instRes.text();
@@ -104,7 +110,7 @@ export async function fetchZerodhaChain(
       (i.instrument_type === "CE" || i.instrument_type === "PE")
   );
 
-  if (instruments.length === 0) return [];
+  if (instruments.length === 0) return { chain: [], tokenMap: {} };
 
   // Batch quote (max 500)
   const syms   = instruments.map((i) => `NFO:${i.tradingsymbol}`);

@@ -5,10 +5,13 @@
 //  PORT: 8765 (configurable via WS_PORT env)
 //
 //  This server:
-//   1. Connects to Upstox v3 Market Data Feed (protobuf binary)
-//      OR Zerodha KiteTicker (JSON/binary)
+//   1. Connects to Upstox v3 Market Data Feed  OR  Zerodha KiteTicker
 //   2. Decodes ticks
 //   3. Broadcasts normalised JSON to all connected frontend clients
+//
+//  Internal HTTP API:
+//    GET  /health    → status check
+//    POST /token     → inject fresh access token (called by Next.js OAuth route)
 //
 //  Frontend connects to: ws://localhost:8765
 // ─────────────────────────────────────────────────────────────────────────────
@@ -17,27 +20,50 @@ import * as http from "http";
 
 const PORT = Number(process.env.WS_PORT ?? 8765);
 
-// ── Credentials (set in env or ws-server/.env) ────────────────────────────────
-// Tokens are mutable — the Next.js OAuth callback POSTs fresh tokens via POST /token
+// ── Logging helpers ───────────────────────────────────────────────────────────
+function log(scope: string, msg: string) {
+  const ts = new Date().toISOString();
+  console.log(`[${ts}] [${scope}] ${msg}`);
+}
+function warn(scope: string, msg: string) {
+  const ts = new Date().toISOString();
+  console.warn(`[${ts}] [${scope}] ⚠  ${msg}`);
+}
+function err(scope: string, msg: string) {
+  const ts = new Date().toISOString();
+  console.error(`[${ts}] [${scope}] ✖  ${msg}`);
+}
+
+// ── Credentials (injected via env or POST /token at runtime) ──────────────────
 let UPSTOX_ACCESS_TOKEN  = process.env.UPSTOX_ACCESS_TOKEN ?? "";
 let ZERODHA_API_KEY      = process.env.ZERODHA_API_KEY ?? "";
 let ZERODHA_ACCESS_TOKEN = process.env.ZERODHA_ACCESS_TOKEN ?? "";
 const BROKER               = (process.env.BROKER ?? "upstox") as "upstox" | "zerodha";
 const WS_INTERNAL_SECRET   = process.env.WS_INTERNAL_SECRET ?? "";
 
+log("WS Proxy", `Starting — broker=${BROKER}, port=${PORT}`);
+if (!WS_INTERNAL_SECRET) warn("WS Proxy", "WS_INTERNAL_SECRET not set — /token endpoint is unprotected");
+
 // ── HTTP Server (health-check + internal token push) ─────────────────────────
 const httpServer = http.createServer((req, res) => {
   if (req.url === "/health" && req.method === "GET") {
     res.writeHead(200, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({ status: "ok", broker: BROKER, uptime: process.uptime() }));
+    res.end(JSON.stringify({
+      status:   "ok",
+      broker:   BROKER,
+      uptime:   process.uptime(),
+      upstox:   { hasToken: !!UPSTOX_ACCESS_TOKEN },
+      zerodha:  { hasApiKey: !!ZERODHA_API_KEY, hasToken: !!ZERODHA_ACCESS_TOKEN },
+      clients:  clients.size,
+    }));
     return;
   }
 
   // POST /token — Next.js OAuth callback pushes a fresh access token here
-  // Header: X-Internal-Secret must match WS_INTERNAL_SECRET env var (if set)
   if (req.url === "/token" && req.method === "POST") {
     const secret = req.headers["x-internal-secret"] ?? "";
     if (WS_INTERNAL_SECRET && secret !== WS_INTERNAL_SECRET) {
+      warn("HTTP /token", "Rejected — invalid X-Internal-Secret");
       res.writeHead(403);
       res.end(JSON.stringify({ error: "Forbidden" }));
       return;
@@ -47,22 +73,30 @@ const httpServer = http.createServer((req, res) => {
     req.on("end", () => {
       try {
         const { access_token, broker } = JSON.parse(body);
-        if (!access_token) throw new Error("access_token missing");
+        if (!access_token) throw new Error("access_token missing in request body");
+
         if (broker === "zerodha") {
-          const parts = access_token.split(":");
-          ZERODHA_API_KEY      = parts[0] ?? ZERODHA_API_KEY;
-          ZERODHA_ACCESS_TOKEN = parts[1] ?? access_token;
-          console.log("[WS Proxy] Zerodha token updated — reconnecting");
-          connectZerodha();
+          // Encoded as "api_key:access_token"
+          const colonIdx = access_token.indexOf(":");
+          if (colonIdx === -1) {
+            // Plain access_token — api_key already in env
+            ZERODHA_ACCESS_TOKEN = access_token;
+          } else {
+            ZERODHA_API_KEY      = access_token.slice(0, colonIdx);
+            ZERODHA_ACCESS_TOKEN = access_token.slice(colonIdx + 1);
+          }
+          log("HTTP /token", `Zerodha token updated (len=${ZERODHA_ACCESS_TOKEN.length}, apiKey=${ZERODHA_API_KEY.slice(0, 4)}…) — reconnecting`);
+          reconnectZerodha();
         } else {
           UPSTOX_ACCESS_TOKEN = access_token;
-          console.log("[WS Proxy] Upstox token updated — reconnecting");
+          log("HTTP /token", `Upstox token updated (len=${UPSTOX_ACCESS_TOKEN.length}) — reconnecting`);
           if (upstoxWs) { upstoxWs.terminate(); upstoxWs = null; }
           connectUpstox();
         }
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ ok: true }));
       } catch (e) {
+        err("HTTP /token", String(e));
         res.writeHead(400);
         res.end(JSON.stringify({ error: String(e) }));
       }
@@ -78,76 +112,114 @@ const httpServer = http.createServer((req, res) => {
 const wss = new WebSocketServer({ server: httpServer });
 const clients = new Set<WebSocket>();
 
-wss.on("connection", (ws) => {
-  console.log(`[WS] Client connected. Total: ${clients.size + 1}`);
+// Token map pushed by the frontend when it subscribes for Zerodha:
+//   key = Zerodha instrument_token (number), value = instrument_key ("NFO:XXX")
+let clientTokenMap: Record<number, string> = {};
+
+wss.on("connection", (ws, req) => {
+  const ip = req.socket.remoteAddress ?? "unknown";
+  log("WS", `Client connected from ${ip}. Total: ${clients.size + 1}`);
   clients.add(ws);
 
   ws.on("message", (msg) => {
     try {
       const data = JSON.parse(msg.toString());
-      // Client can send { type:"subscribe", instruments:["NSE_INDEX|Nifty 50",...] }
-      if (data.type === "subscribe" && Array.isArray(data.instruments)) {
-        subscribeUpstoxInstruments(data.instruments);
+      // Client sends { type:"subscribe", broker:"upstox"|"zerodha", instruments:[...], tokenMap:{...} }
+      if (data.type === "subscribe") {
+        const broker: string = data.broker ?? "upstox";
+
+        if (broker === "zerodha") {
+          // Store the token map for normalizing outgoing ticks
+          if (data.tokenMap && typeof data.tokenMap === "object") {
+            // Keys arrive as strings from JSON — convert to numbers
+            const newMap: Record<number, string> = {};
+            for (const [k, v] of Object.entries(data.tokenMap)) {
+              newMap[Number(k)] = v as string;
+            }
+            clientTokenMap = newMap;
+            const tokenCount = Object.keys(newMap).length;
+            log("WS", `Zerodha tokenMap stored: ${tokenCount} tokens`);
+            if (tokenCount > 0) {
+              subscribeZerodhaTokens(Object.keys(newMap).map(Number), "full");
+            }
+          } else {
+            log("WS", `Zerodha subscribe without tokenMap — not subscribing to any tokens`);
+          }
+        } else if (Array.isArray(data.instruments)) {
+          // Upstox (or any other broker using instrument_key strings)
+          log("WS", `Upstox subscribe: ${data.instruments.length} instruments`);
+          subscribeUpstoxInstruments(data.instruments);
+        }
       }
-    } catch { /* ignore */ }
+    } catch { /* ignore non-JSON */ }
   });
 
-  ws.on("close", () => {
+  ws.on("close", (code, reason) => {
     clients.delete(ws);
-    console.log(`[WS] Client disconnected. Total: ${clients.size}`);
+    log("WS", `Client disconnected (code=${code}, reason=${reason.toString() || "none"}). Total: ${clients.size}`);
+  });
+
+  ws.on("error", (e) => {
+    err("WS client", e.message);
   });
 });
 
 function broadcast(payload: object) {
   const json = JSON.stringify(payload);
+  let sent = 0;
   for (const client of clients) {
     if (client.readyState === WebSocket.OPEN) {
       client.send(json);
+      sent++;
     }
   }
+  return sent;
 }
 
 // ── UPSTOX WebSocket Feed ─────────────────────────────────────────────────────
 let upstoxWs: WebSocket | null = null;
 let pendingInstruments: string[] = [];
+let upstoxReconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
 async function connectUpstox() {
+  if (upstoxReconnectTimer) { clearTimeout(upstoxReconnectTimer); upstoxReconnectTimer = null; }
+
   if (!UPSTOX_ACCESS_TOKEN) {
-    console.warn("[Upstox WS] No access token — broadcasting mock ticks. Log in via the app to activate live feed.");
+    warn("Upstox WS", "No access token — broadcasting auth_required. Log in via the app to activate live feed.");
     broadcast({ type: "status", status: "auth_required", broker: "upstox" });
-    startMockBroadcast();
     return;
   }
 
+  log("Upstox WS", "Requesting authorised WS URL…");
+
   try {
-    // Get authorised redirect URI
     const authRes = await fetch(
       "https://api.upstox.com/v3/feed/market-data-feed/authorize",
       { headers: { Authorization: `Bearer ${UPSTOX_ACCESS_TOKEN}` } }
     );
+
     if (authRes.status === 401) {
-      // Token expired — clear it so we fall back to mock mode and notify clients
-      console.warn("[Upstox WS] Token expired (401) — waiting for fresh token via POST /token");
+      warn("Upstox WS", "Token expired (401) — clearing token, broadcasting auth_required");
       UPSTOX_ACCESS_TOKEN = "";
       broadcast({ type: "status", status: "auth_required", broker: "upstox" });
-      startMockBroadcast();
       return;
     }
-    if (!authRes.ok) throw new Error(`Auth failed ${authRes.status}`);
+    if (!authRes.ok) throw new Error(`Auth endpoint returned ${authRes.status} ${authRes.statusText}`);
+
     const { data } = await authRes.json();
     const wsUrl: string = data.authorizedRedirectUri;
+    log("Upstox WS", `Connecting to authorised feed URL…`);
 
-    console.log("[Upstox WS] Connecting to", wsUrl);
     upstoxWs = new WebSocket(wsUrl, {
       headers: {
-        "Origin": "https://upstox.com",
-        "User-Agent": "Mozilla/5.0 (compatible; upstox-market-data-feed/1.0)",
+        "Origin":     "https://upstox.com",
+        "User-Agent": "Mozilla/5.0 (compatible; optix-market-feed/1.0)",
       },
     });
     upstoxWs.binaryType = "arraybuffer";
 
     upstoxWs.on("open", () => {
-      console.log("[Upstox WS] Connected");
+      log("Upstox WS", "Connected ✓");
       broadcast({ type: "status", status: "connected", broker: "upstox" });
       if (pendingInstruments.length > 0) {
         subscribeUpstoxInstruments(pendingInstruments);
@@ -155,175 +227,283 @@ async function connectUpstox() {
     });
 
     upstoxWs.on("message", (data: ArrayBuffer | Buffer) => {
-      // Upstox v3 uses protobuf — decode using the feed proto schema
-      // For simplicity we attempt JSON decode first (v2 JSON mode),
-      // then fall back to raw buffer logging
       try {
         const text = Buffer.isBuffer(data)
           ? data.toString("utf8")
-          : Buffer.from(data).toString("utf8");
+          : Buffer.from(data as ArrayBuffer).toString("utf8");
         const feed = JSON.parse(text);
-        // Normalise and broadcast
         const ticks = normaliseUpstoxFeed(feed);
         if (ticks.length > 0) {
-          broadcast({ type: "ticks", ticks });
+          broadcast({ type: "ticks", broker: "upstox", ticks });
         }
       } catch {
-        // Binary protobuf — decode with protobufjs if needed
-        // See: https://github.com/upstox/upstox-nodejs/blob/main/lib/websocket.js
-        // For now broadcast raw size info so client knows feed is alive
-        broadcast({ type: "heartbeat", ts: Date.now() });
+        // Binary protobuf frame — signal heartbeat so client knows data is flowing
+        broadcast({ type: "heartbeat", broker: "upstox", ts: Date.now() });
       }
     });
 
-    upstoxWs.on("error", (err) => {
-      console.error("[Upstox WS] Error:", err.message);
-      broadcast({ type: "status", status: "error", message: err.message });
+    upstoxWs.on("error", (e) => {
+      err("Upstox WS", e.message);
+      broadcast({ type: "status", status: "error", broker: "upstox", message: e.message });
     });
 
-    upstoxWs.on("close", () => {
-      console.log("[Upstox WS] Closed — reconnecting in 5s");
+    upstoxWs.on("close", (code, reason) => {
+      log("Upstox WS", `Closed (code=${code}, reason=${reason.toString() || "none"}) — reconnecting in 5s`);
       broadcast({ type: "status", status: "reconnecting", broker: "upstox" });
-      setTimeout(connectUpstox, 5000);
+      upstoxWs = null;
+      upstoxReconnectTimer = setTimeout(connectUpstox, 5_000);
     });
+
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e);
-    console.error("[Upstox WS] Connection error:", msg);
-    broadcast({ type: "status", status: "error", message: msg });
-    setTimeout(connectUpstox, 10_000);
+    err("Upstox WS", `Connection error: ${msg}`);
+    broadcast({ type: "status", status: "error", broker: "upstox", message: msg });
+    upstoxReconnectTimer = setTimeout(connectUpstox, 10_000);
   }
 }
 
 function subscribeUpstoxInstruments(instruments: string[]) {
   pendingInstruments = instruments;
-  if (!upstoxWs || upstoxWs.readyState !== WebSocket.OPEN) return;
+  if (!upstoxWs || upstoxWs.readyState !== WebSocket.OPEN) {
+    log("Upstox WS", `Stored ${instruments.length} instruments — will subscribe on connect`);
+    return;
+  }
   const msg = JSON.stringify({
-    guid:   "option-chain-feed",
+    guid:   "optix-feed",
     method: "sub",
     data:   { mode: "full", instrumentKeys: instruments },
   });
   upstoxWs.send(msg);
-  console.log(`[Upstox WS] Subscribed to ${instruments.length} instruments`);
+  log("Upstox WS", `Subscribed to ${instruments.length} instruments`);
 }
 
 /** Normalise Upstox JSON feed response */
 function normaliseUpstoxFeed(feed: Record<string, unknown>): object[] {
-  // Upstox v2 JSON feed has shape: { feeds: { [instrument_key]: { ff: { marketFF: {...} } } } }
   const feeds = (feed as { feeds?: Record<string, unknown> }).feeds ?? {};
   const ticks: object[] = [];
   for (const [key, val] of Object.entries(feeds)) {
-    const mkt = (val as { ff?: { marketFF?: Record<string, unknown> } }).ff?.marketFF ?? {};
-    const ltpc = (mkt as { ltpc?: { ltp?: number } }).ltpc ?? {};
+    const mkt  = (val as { ff?: { marketFF?: Record<string, unknown> } }).ff?.marketFF ?? {};
+    const ltpc = (mkt as { ltpc?: { ltp?: number; cp?: number } }).ltpc ?? {};
     const oi   = (mkt as { oi?: number }).oi ?? 0;
     const vol  = (mkt as { volume?: number }).volume ?? 0;
-    ticks.push({ instrument_key: key, ltp: ltpc.ltp ?? 0, oi, volume: vol });
+    ticks.push({
+      instrument_key: key,
+      ltp:    ltpc.ltp  ?? 0,
+      cp:     ltpc.cp   ?? 0,
+      oi,
+      volume: vol,
+    });
   }
   return ticks;
 }
 
 // ── Zerodha KiteTicker ────────────────────────────────────────────────────────
-// Zerodha uses their own kiteconnect npm package's KiteTicker class.
-// Since we can't import it directly without installing kiteconnect,
-// we replicate the WS connection manually.
+let zerodhaWs: WebSocket | null = null;
+let zerodhaReconnectTimer: ReturnType<typeof setTimeout> | null = null;
+let zerodhaTokens: number[] = []; // subscribed instrument tokens
+
+function reconnectZerodha() {
+  if (zerodhaWs) {
+    zerodhaWs.removeAllListeners();
+    zerodhaWs.terminate();
+    zerodhaWs = null;
+  }
+  if (zerodhaReconnectTimer) { clearTimeout(zerodhaReconnectTimer); zerodhaReconnectTimer = null; }
+  connectZerodha();
+}
+
 async function connectZerodha() {
+  if (zerodhaReconnectTimer) { clearTimeout(zerodhaReconnectTimer); zerodhaReconnectTimer = null; }
+
   if (!ZERODHA_API_KEY || !ZERODHA_ACCESS_TOKEN) {
-    console.warn("[Zerodha WS] No credentials — broadcasting mock ticks");
-    startMockBroadcast();
+    warn("Zerodha WS", "No credentials — broadcasting auth_required. Log in via the app.");
+    broadcast({ type: "status", status: "auth_required", broker: "zerodha" });
     return;
   }
 
   const wsUrl = `wss://ws.kite.trade?api_key=${ZERODHA_API_KEY}&access_token=${ZERODHA_ACCESS_TOKEN}`;
-  const zWs = new WebSocket(wsUrl);
-  zWs.binaryType = "arraybuffer";
+  log("Zerodha WS", `Connecting to wss://ws.kite.trade (apiKey=${ZERODHA_API_KEY.slice(0, 4)}…)`);
 
-  zWs.on("open", () => {
-    console.log("[Zerodha WS] Connected");
+  zerodhaWs = new WebSocket(wsUrl);
+  zerodhaWs.binaryType = "arraybuffer";
+
+  zerodhaWs.on("open", () => {
+    log("Zerodha WS", "Connected ✓");
     broadcast({ type: "status", status: "connected", broker: "zerodha" });
-  });
-
-  zWs.on("message", (data: ArrayBuffer | Buffer) => {
-    // Zerodha binary tick parsing
-    const buf  = Buffer.isBuffer(data) ? data : Buffer.from(data as ArrayBuffer);
-    if (buf.length < 2) return;
-    const ticks = parseZerodhaBinaryTicks(buf);
-    if (ticks.length > 0) {
-      broadcast({ type: "ticks", broker: "zerodha", ticks });
+    // Re-subscribe if we had tokens from before
+    if (zerodhaTokens.length > 0) {
+      subscribeZerodhaTokens(zerodhaTokens, "full");
     }
   });
 
-  zWs.on("error", (err) => {
-    broadcast({ type: "status", status: "error", message: err.message });
-    setTimeout(connectZerodha, 5000);
+  zerodhaWs.on("message", (data: ArrayBuffer | Buffer) => {
+    const buf = Buffer.isBuffer(data) ? data : Buffer.from(data as ArrayBuffer);
+    // KiteTicker sends text mode heartbeat as plain "{}""
+    if (buf.length < 2) return;
+    // Check if it looks like text (JSON)
+    if (buf[0] === 0x7b) { // "{"
+      try {
+        const msg = JSON.parse(buf.toString("utf8"));
+        // Kite sends { type: "message", data: "..." } for text mode
+        if (msg.type === "message" || msg.type === "error") {
+          log("Zerodha WS", `Text message: ${JSON.stringify(msg)}`);
+        }
+      } catch { /* ignore */ }
+      return;
+    }
+    const ticks = parseZerodhaBinaryTicks(buf);
+    if (ticks.length > 0) {
+      // Normalize: translate instrument_token → instrument_key using clientTokenMap
+      const normalized = (ticks as Array<Record<string, unknown>>).map((t) => {
+        const token = t.instrument_token as number;
+        const key   = clientTokenMap[token];
+        return key
+          ? { ...t, instrument_key: key }
+          : t; // keep raw token so client can still try client-side fallback
+      });
+      if (normalized.some((t) => t.instrument_key)) {
+        const resolvedCount = normalized.filter((t) => t.instrument_key).length;
+        log("Zerodha WS", `Broadcasting ${resolvedCount}/${normalized.length} resolved ticks`);
+      }
+      broadcast({ type: "ticks", broker: "zerodha", ticks: normalized });
+    }
   });
 
-  zWs.on("close", () => {
+  zerodhaWs.on("error", (e) => {
+    err("Zerodha WS", e.message);
+    broadcast({ type: "status", status: "error", broker: "zerodha", message: e.message });
+  });
+
+  zerodhaWs.on("close", (code, reason) => {
+    log("Zerodha WS", `Closed (code=${code}, reason=${reason.toString() || "none"}) — reconnecting in 5s`);
     broadcast({ type: "status", status: "reconnecting", broker: "zerodha" });
-    setTimeout(connectZerodha, 5000);
+    zerodhaWs = null;
+    // If token was bad (code 1008 or 403-level) don't reconnect immediately
+    const isAuthError = code === 1008 || code === 4001 || code === 4002;
+    if (isAuthError) {
+      warn("Zerodha WS", `Auth error (code=${code}) — clearing token, waiting for new login`);
+      ZERODHA_ACCESS_TOKEN = "";
+      broadcast({ type: "status", status: "auth_required", broker: "zerodha" });
+      return;
+    }
+    zerodhaReconnectTimer = setTimeout(connectZerodha, 5_000);
   });
 }
 
-/** Parse Zerodha binary tick packet */
+/** Subscribe to instrument tokens on Zerodha KiteTicker */
+function subscribeZerodhaTokens(tokens: number[], mode: "ltp" | "quote" | "full" = "full") {
+  zerodhaTokens = tokens;
+  if (!zerodhaWs || zerodhaWs.readyState !== WebSocket.OPEN) {
+    log("Zerodha WS", `Stored ${tokens.length} tokens — will subscribe on connect`);
+    return;
+  }
+  // KiteTicker subscribe message format (binary mode)
+  // Set mode: message type 11=subscribe, 12=unsubscribe
+  // For mode setting: message type 15=setMode
+  const subMsg = JSON.stringify({ a: "subscribe", v: tokens });
+  zerodhaWs.send(subMsg);
+  log("Zerodha WS", `Subscribed to ${tokens.length} tokens`);
+
+  const modeKey = { ltp: "ltp", quote: "quote", full: "full" }[mode];
+  const modeMsg = JSON.stringify({ a: "mode", v: [modeKey, tokens] });
+  zerodhaWs.send(modeMsg);
+  log("Zerodha WS", `Set mode=${modeKey} for ${tokens.length} tokens`);
+}
+
+/** Parse Zerodha binary tick packets
+ *  Format: [2-byte num_packets] then for each: [2-byte pkt_len][pkt_len bytes]
+ *  Packet bytes (for full mode, pktLen>=184):
+ *    0-3:   instrument_token (uint32 BE)
+ *    4-7:   last_traded_price / 100 (uint32 BE)
+ *    8-11:  last_traded_qty (uint32 BE)
+ *    12-15: average_traded_price / 100 (uint32 BE)
+ *    16-19: volume (uint32 BE)
+ *    20-23: buy_qty (uint32 BE)
+ *    24-27: sell_qty (uint32 BE)
+ *    28-31: open / 100 (uint32 BE)
+ *    32-35: high / 100 (uint32 BE)
+ *    36-39: low / 100 (uint32 BE)
+ *    40-43: close / 100 (uint32 BE)
+ *    44-47: last_traded_timestamp (uint32 BE)
+ *    48-51: oi (uint32 BE)
+ *    52-55: oi_day_high (uint32 BE)
+ *    56-59: oi_day_low (uint32 BE)
+ *    60-63: exchange_timestamp (uint32 BE)
+ *    64-…: depth data (5 buy+5 sell × 12 bytes each)
+ */
 function parseZerodhaBinaryTicks(buf: Buffer): object[] {
+  if (buf.length < 2) return [];
+
+  const numPackets = buf.readUInt16BE(0);
+  if (numPackets === 0) return [];
+
   const ticks: object[] = [];
-  let offset = 0;
-  while (offset < buf.length - 1) {
-    // Kite binary format: 2-byte number of packets, then repeated 4-byte instrument_token, ...
-    if (offset === 0) {
-      const numPackets = buf.readUInt16BE(offset);
-      offset += 2;
-      if (numPackets === 0) break;
-    }
-    // Each quote packet: 2-byte length, then data
+  let offset = 2; // skip the first 2-byte count
+
+  for (let i = 0; i < numPackets; i++) {
     if (offset + 2 > buf.length) break;
     const pktLen = buf.readUInt16BE(offset);
     offset += 2;
-    if (pktLen < 8) { offset += pktLen; continue; }
-    if (offset + pktLen > buf.length) break;
+    if (pktLen < 8 || offset + pktLen > buf.length) {
+      offset += pktLen;
+      continue;
+    }
 
-    const pkt = buf.slice(offset, offset + pktLen);
-    offset += pktLen;
+    const pkt              = buf.slice(offset, offset + pktLen);
+    offset                += pktLen;
 
     const instrument_token = pkt.readUInt32BE(0);
-    const last_price = pkt.readUInt32BE(4) / 100;
-    const oi = pktLen >= 24 ? pkt.readUInt32BE(16) : 0;
-    const volume = pktLen >= 28 ? pkt.readUInt32BE(12) : 0;
+    const last_price       = pkt.readUInt32BE(4) / 100;
+    const volume           = pktLen >= 20 ? pkt.readUInt32BE(16) : 0;
+    const oi               = pktLen >= 52 ? pkt.readUInt32BE(48) : 0;
+    const oi_day_high      = pktLen >= 56 ? pkt.readUInt32BE(52) / 100 : 0;
+    const oi_day_low       = pktLen >= 60 ? pkt.readUInt32BE(56) / 100 : 0;
+    const open             = pktLen >= 32 ? pkt.readUInt32BE(28) / 100 : 0;
+    const high             = pktLen >= 36 ? pkt.readUInt32BE(32) / 100 : 0;
+    const low              = pktLen >= 40 ? pkt.readUInt32BE(36) / 100 : 0;
+    const close            = pktLen >= 44 ? pkt.readUInt32BE(40) / 100 : 0;
 
-    ticks.push({ instrument_token, ltp: last_price, oi, volume });
-    break; // Only parse the first packet to avoid infinite loop
+    ticks.push({
+      instrument_token,
+      ltp:        last_price,
+      volume,
+      oi,
+      oi_day_high,
+      oi_day_low,
+      ohlc: { open, high, low, close },
+    });
   }
-  return ticks;
-}
 
-// ── Mock heartbeat when no credentials ───────────────────────────────────────
-function startMockBroadcast() {
-  setInterval(() => {
-    broadcast({ type: "heartbeat", ts: Date.now(), broker: "mock" });
-  }, 3000);
+  return ticks;
 }
 
 // ── Start ─────────────────────────────────────────────────────────────────────
 function startServer(port: number) {
   httpServer.listen(port, () => {
-    console.log(`[WS Proxy] HTTP health: http://localhost:${port}/health`);
-    console.log(`[WS Proxy] WebSocket: ws://localhost:${port}`);
-    console.log(`[WS Proxy] Broker: ${BROKER}`);
-    if (BROKER === "upstox") {
-      connectUpstox();
-    } else {
+    log("WS Proxy", `HTTP health:  http://localhost:${port}/health`);
+    log("WS Proxy", `WebSocket:    ws://localhost:${port}`);
+    log("WS Proxy", `Broker mode:  ${BROKER}`);
+    log("WS Proxy", `Upstox token: ${UPSTOX_ACCESS_TOKEN ? `set (len=${UPSTOX_ACCESS_TOKEN.length})` : "not set"}`);
+    log("WS Proxy", `Zerodha cred: apiKey=${ZERODHA_API_KEY ? "set" : "not set"}, token=${ZERODHA_ACCESS_TOKEN ? "set" : "not set"}`);
+
+    if (BROKER === "zerodha") {
       connectZerodha();
+    } else {
+      connectUpstox();
     }
   });
 
-  httpServer.on("error", (err: NodeJS.ErrnoException) => {
-    if (err.code === "EADDRINUSE") {
-      console.warn(`[WS Proxy] Port ${port} in use, trying ${port + 1}...`);
+  httpServer.on("error", (e: NodeJS.ErrnoException) => {
+    if (e.code === "EADDRINUSE") {
+      warn("WS Proxy", `Port ${port} in use — trying ${port + 1}…`);
       httpServer.removeAllListeners("error");
       httpServer.close();
       startServer(port + 1);
     } else {
-      throw err;
+      throw e;
     }
   });
 }
 
 startServer(PORT);
+

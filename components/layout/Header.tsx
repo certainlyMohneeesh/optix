@@ -2,6 +2,7 @@
 import { useState, useEffect } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { BrokerLoginModal } from "@/components/layout/BrokerLoginModal";
 import {
   Select,
   SelectContent,
@@ -59,6 +60,8 @@ export function Header({
 }: HeaderProps) {
   const expiryList = expiries.length ? expiries : (EXPIRIES[symbol] ?? []);
   const status = getStatus(connStatus);
+
+  const [loginOpen, setLoginOpen] = useState(false);
 
   const [now, setNow] = useState<Date>(() => new Date());
   useEffect(() => {
@@ -133,16 +136,17 @@ export function Header({
           </Badge>
 
           {(connStatus === "auth_required" || connStatus === "demo") && (
-            <a href={`/api/auth/${broker}/login`}>
-              <Button
-                size="sm"
-                className="h-7 px-2 sm:px-3 text-xs font-bold bg-orange-500 hover:bg-orange-600 text-white gap-1"
-              >
-                <LogIn className="h-3 w-3" />
-                <span className="hidden sm:inline">Login</span>
-              </Button>
-            </a>
+            <Button
+              size="sm"
+              className="h-7 px-2 sm:px-3 text-xs font-bold bg-orange-500 hover:bg-orange-600 text-white gap-1"
+              onClick={() => setLoginOpen(true)}
+            >
+              <LogIn className="h-3 w-3" />
+              <span className="hidden sm:inline">Login</span>
+            </Button>
           )}
+
+          <BrokerLoginModal open={loginOpen} onOpenChange={setLoginOpen} />
         </div>
       </div>
 
@@ -200,7 +204,7 @@ export function Header({
 
           {/* Tabs */}
           <nav className="flex gap-0.5 shrink-0">
-            {(["chain", "analytics", "greeks", "setup"] as ViewTab[]).map((t) => (
+            {(["chain", "analytics", "greeks", "docs"] as ViewTab[]).map((t) => (
               <Button
                 key={t}
                 size="sm"

@@ -35,6 +35,8 @@ export interface UseOptionChainReturn {
   connStatus: ConnectionStatus;
   lastTs:    Date;
   tickAnim:  boolean;
+  // Zerodha WS tick translation: instrument_token (number) → instrument_key ("NFO:XXX")
+  zerodhaTokenMap: Record<number, string>;
   // Actions
   setBroker:    (b: Broker) => void;
   setSymbol:    (s: Symbol) => void;
@@ -71,6 +73,8 @@ export function useOptionChain(): UseOptionChainReturn {
   const intervalRef  = useRef<ReturnType<typeof setInterval> | null>(null);
   // Tracks WS connection status so REST refresh doesn't downgrade it
   const wsStatusRef  = useRef<ConnectionStatus>("demo");
+  // Zerodha: instrument_token → instrument_key map (populated on each chain fetch)
+  const [zerodhaTokenMap, setZerodhaTokenMap] = useState<Record<number, string>>({});
 
   const setConnStatusSafe = useCallback((s: ConnectionStatus) => {
     wsStatusRef.current = s;
@@ -101,6 +105,11 @@ export function useOptionChain(): UseOptionChainReturn {
       const newChain: ChainRow[] = data.chain ?? buildMockChain(symbol);
       const newSpot: number      = data.spot  ?? SPOT_BASE[symbol];
       const source: string       = data.source ?? "mock";
+      // Store Zerodha token map for WS tick translation
+      if (broker === "zerodha" && data.tokenMap && Object.keys(data.tokenMap).length > 0) {
+        setZerodhaTokenMap(data.tokenMap as Record<number, string>);
+        console.log(`[useOptionChain] zerodha tokenMap updated: ${Object.keys(data.tokenMap).length} tokens`);
+      }
       // Only set REST-derived status if WS is not actively connected/reconnecting
       const wsLive = wsStatusRef.current === "connected" || wsStatusRef.current === "reconnecting";
       if (!wsLive) {
@@ -168,7 +177,7 @@ export function useOptionChain(): UseOptionChainReturn {
     setSpot(SPOT_BASE[symbol]);
     setExpiries(computed);
     // Fetch live expiries from API (replaces computed list when authenticated)
-    fetch(`/api/expiries/upstox?symbol=${symbol}`)
+    fetch(`/api/expiries/${broker}?symbol=${symbol}`)
       .then((r) => r.json())
       .then(({ expiries: live }: { expiries: string[] }) => {
         if (live?.length) {
@@ -177,7 +186,7 @@ export function useOptionChain(): UseOptionChainReturn {
         }
       })
       .catch(() => {}); // silently fall back to computed
-  }, [symbol]);
+  }, [symbol, broker]);
 
   // Initial load + reload on key changes
   useEffect(() => { refresh(); }, [symbol, expiry, broker]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -192,13 +201,20 @@ export function useOptionChain(): UseOptionChainReturn {
     return () => { if (intervalRef.current) clearInterval(intervalRef.current); };
   }, [liveMode, refresh]);
 
-  const setBroker = useCallback((b: Broker) => { setBrokerRaw(b); wsStatusRef.current = "demo"; setConnStatus("demo"); }, []);
+  const setBroker = useCallback((b: Broker) => {
+    setBrokerRaw(b);
+    wsStatusRef.current = "demo";
+    setConnStatus("demo");
+    // Clear token map when switching away from zerodha
+    if (b !== "zerodha") setZerodhaTokenMap({});
+  }, []);
   const setSymbol = useCallback((s: Symbol) => { setSymbolRaw(s); }, []);
   const setExpiry = useCallback((e: string) => { setExpiryRaw(e); }, []);
 
   return {
     chain, spot, analytics,
     broker, symbol, expiry, expiries, tab, metric, filter, liveMode, connStatus, lastTs, tickAnim,
+    zerodhaTokenMap,
     setBroker, setSymbol, setExpiry, setTab, setMetric, setFilter, setLiveMode,
     refresh, applyTicks,
     setConnStatus: setConnStatusSafe,

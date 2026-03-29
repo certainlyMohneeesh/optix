@@ -170,7 +170,7 @@ export interface ZerodhaQuote {
 }
 
 // ── UI state ──────────────────────────────────────────────────────────────────
-export type ViewTab = "chain" | "analytics" | "greeks" | "setup";
+export type ViewTab = "chain" | "analytics" | "greeks" | "docs";
 export type MetricKey = "oi" | "ltp" | "volume" | "ltpvol" | "iv";
 export type FilterKey = "all" | "itm" | "otm" | "atm";
 export type ConnectionStatus = "demo" | "connecting" | "connected" | "error" | "auth_required" | "reconnecting";
